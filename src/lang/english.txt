@@ -3864,6 +3864,8 @@ STR_ORDER_CONDITIONAL                                           :Conditional ord
 STR_ORDER_SHARE                                                 :Share orders
 STR_ORDERS_GO_TO_COUPLE                                         :Go to couple
 STR_ORDER_WAIT_FOR_COUPLE                                       :Wait for couple
+STR_ORDER_REVERSE_PUSH                                          :Turn around (push)
+STR_ORDER_REVERSE_RUN_AROUND                                    :Turn around (locomotive runs around)
 STR_ORDERS_GO_TO_TOOLTIP                                        :{BLACK}Insert a new order before the highlighted order, or add to end of list. Ctrl makes station orders 'full load any cargo', waypoint orders 'non-stop' and depot orders 'service'. 'Share orders' or Ctrl lets this vehicle share orders with the selected vehicle. Clicking a vehicle copies the orders from that vehicle. A depot order disables automatic servicing of the vehicle
 
 STR_ORDER_GO_TO_COUPLE                                          :Go to couple {STRING} train

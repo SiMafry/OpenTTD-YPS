@@ -51,6 +51,7 @@ enum OrderType {
 	OT_GOTO_COUPLE  = 9,
 	OT_WAIT_COUPLE  = 10,
 	OT_DECOUPLE     = 11,
+	OT_REVERSE      = 12, ///< Turn the train around where it stands (instant order).
 	OT_END
 };
 
@@ -88,6 +89,13 @@ enum OrderCoupleFlags {
 	ODC_IS_EMPTY = 1,
 	ODC_IS_FULL  = 2,
 	ODC_END      = 3,
+};
+
+/** How an #OT_REVERSE order turns the train around. */
+enum OrderReverseType {
+	ORT_PUSH       = 0, ///< Flip the whole train; the locomotive stays where it is (decouple patch style).
+	ORT_RUN_AROUND = 1, ///< The locomotive moves to the other end (original OpenTTD style).
+	ORT_END,
 };
 
 enum OrderDecoupleOrdersFlags {

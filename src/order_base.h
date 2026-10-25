@@ -79,6 +79,7 @@ public:
 	void MakeDecouple();
 	void MakeGoToCouple();
 	void MakeWaitCouple();
+	void MakeReverse(OrderReverseType reverse_type);
 	void MakeDummy();
 	void MakeConditional(VehicleOrderID order);
 	void MakeImplicit(StationID destination);
@@ -137,6 +138,18 @@ public:
 	inline CargoID GetCoupleCargoType() const { return this->refit_cargo; }
 	
 	void SetCoupleCargoType(CargoID cargo) { this->refit_cargo = cargo; }
+
+	/**
+	 * How does this reverse order turn the train around?
+	 * @pre IsType(OT_REVERSE)
+	 */
+	inline OrderReverseType GetReverseType() const { return (OrderReverseType)GB(this->flags, 0, 1); }
+
+	/**
+	 * Set how this reverse order turns the train around.
+	 * @pre IsType(OT_REVERSE)
+	 */
+	inline void SetReverseType(OrderReverseType reverse_type) { SB(this->flags, 0, 1, reverse_type); }
 
 	/** How must the consist be loaded? */
 	inline OrderLoadFlags GetLoadType() const { return (OrderLoadFlags)GB(this->flags, 4, 3); }

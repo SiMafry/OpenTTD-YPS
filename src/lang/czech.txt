@@ -3916,6 +3916,8 @@ STR_ORDER_GO_TO_NEAREST_DEPOT                                   :Jet do nejbliž
 STR_ORDER_GO_TO_NEAREST_HANGAR                                  :Jet do nejbližšího hangáru
 STR_ORDER_CONDITIONAL                                           :Podmíněné přeskočení příkazu
 STR_ORDER_SHARE                                                 :Sdílet příkazy
+STR_ORDER_REVERSE_PUSH                                          :Otočit (sunout)
+STR_ORDER_REVERSE_RUN_AROUND                                    :Otočit (přepřáhnout lokomotivu)
 STR_ORDERS_GO_TO_TOOLTIP                                        :{BLACK}Vložit nový příkaz před označený příkaz, nebo přidat na konec seznamu. Ctrl přidá příkaz pro stanici jako 'plně naložit cokoliv', pro směrování na trati jako 'bez zastavení' a pro depo jako 'údržba'. 'Sdílet příkazy' nebo Ctrl nechá vozidlo sdílet příkazy s vybraným vozidlem. Kliknutí na vozidlo zkopíruje jeho příkazy
 
 STR_ORDERS_VEH_WITH_SHARED_ORDERS_LIST_TOOLTIP                  :{BLACK}Zobrazit všechny prostředky se stejným jízdním řádem

@@ -38,11 +38,14 @@
 #include "station_base.h"
 #include "economy_base.h"
 #include "texteff.hpp"
+#include "timetable.h"
 
 #include "table/strings.h"
 #include "table/train_cmd.h"
 
 #include "safeguards.h"
+
+Train *ReverseTrainDirection(Train *v, bool run_around = false);
 
 extern void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index);
 extern void ChangeVehicleNews(VehicleID from_index, VehicleID to_index);
@@ -1706,6 +1709,51 @@ void ReverseTrainSwapVeh(Train *v, int l, int r)
 	}
 }
 
+/**
+ * Swap vehicles \a l and \a r in consist \a v and turn them around, the way
+ * original OpenTTD reverses a train (used for the 'run around' reversal).
+ * Unlike #ReverseTrainSwapVeh this also reverses the direction of the vehicles,
+ * which the decouple patch moved out of #UpdateStatusAfterSwap.
+ * @param v Consist to change.
+ * @param l %Vehicle index in the consist of the first vehicle.
+ * @param r %Vehicle index in the consist of the second vehicle.
+ */
+static void ReverseTrainSwapVehRunAround(Train *v, int l, int r)
+{
+	Train *a, *b;
+
+	/* locate vehicles to swap */
+	for (a = v; l != 0; l--) a = a->Next();
+	for (b = v; r != 0; r--) b = b->Next();
+
+	if (a != b) {
+		/* swap the hidden bits */
+		{
+			uint16 tmp = (a->vehstatus & ~VS_HIDDEN) | (b->vehstatus & VS_HIDDEN);
+			b->vehstatus = (b->vehstatus & ~VS_HIDDEN) | (a->vehstatus & VS_HIDDEN);
+			a->vehstatus = tmp;
+		}
+
+		Swap(a->track, b->track);
+		Swap(a->direction, b->direction);
+		Swap(a->x_pos, b->x_pos);
+		Swap(a->y_pos, b->y_pos);
+		Swap(a->tile,  b->tile);
+		Swap(a->z_pos, b->z_pos);
+
+		SwapTrainFlags(&a->gv_flags, &b->gv_flags);
+
+		if (a->track != TRACK_BIT_DEPOT) a->direction = ReverseDir(a->direction);
+		if (b->track != TRACK_BIT_DEPOT) b->direction = ReverseDir(b->direction);
+		UpdateStatusAfterSwap(a);
+		UpdateStatusAfterSwap(b);
+	} else {
+		SwapTrainFlags(&a->gv_flags, &a->gv_flags);
+		if (a->track != TRACK_BIT_DEPOT) a->direction = ReverseDir(a->direction);
+		UpdateStatusAfterSwap(a);
+	}
+}
+
 void ReverseTrainMultiheaded(Train *v)
 {
 	for (Train *t = v; t != NULL; t = t->Next()) {
@@ -1866,6 +1914,10 @@ static Train *ReverseTrainVeh(Train *v)
 	}
 
 	new_front->CopyVehicleConfigAndStatistics(v);
+	/* The old front is a plain vehicle now; it must not keep the unit number,
+	 * or it would show up again as a duplicate number when it becomes a front
+	 * again (e.g. after decoupling). */
+	v->unitnumber = 0;
 	TransferLoadingState(v, new_front);
 	ChangeVehicleViewports(v->index, new_front->index);
 	ChangeVehicleViewWindow(v->index, new_front->index);
@@ -1985,7 +2037,102 @@ static void AdvanceWagonsAfterCouple(Train *v)
  * Turn a train around.
  * @param v %Train to turn around.
  */
-void ReverseTrainDirection(Train *v)
+/**
+ * Advances wagons for a run-around reversal, needed for variable length wagons.
+ * This one is called before the train is reversed. (From original OpenTTD.)
+ * @param v First vehicle in chain
+ */
+static void AdvanceWagonsBeforeSwap(Train *v)
+{
+	Train *base = v;
+	Train *first = base; // first vehicle to move
+	Train *last = v->Last(); // last vehicle to move
+	uint length = CountVehiclesInChain(v);
+
+	while (length > 2) {
+		last = last->Previous();
+		first = first->Next();
+
+		int differential = base->CalcNextVehicleOffset() - last->CalcNextVehicleOffset();
+
+		/* do not update images now
+		 * negative differential will be handled in AdvanceWagonsAfterSwap() */
+		for (int i = 0; i < differential; i++) TrainController(first, last->Next());
+
+		base = first; // == base->Next()
+		length -= 2;
+	}
+}
+
+/**
+ * Advances wagons for a run-around reversal, needed for variable length wagons.
+ * This one is called after the train is reversed. (From original OpenTTD.)
+ * @param v First vehicle in chain
+ */
+static void AdvanceWagonsAfterSwap(Train *v)
+{
+	/* first of all, fix the situation when the train was entering a depot */
+	Train *dep = v; // last vehicle in front of just left depot
+	while (dep->Next() != NULL && (dep->track == TRACK_BIT_DEPOT || dep->Next()->track != TRACK_BIT_DEPOT)) {
+		dep = dep->Next(); // find first vehicle outside of a depot, with next vehicle inside a depot
+	}
+
+	Train *leave = dep->Next(); // first vehicle in a depot we are leaving now
+
+	if (leave != NULL) {
+		/* 'pull' next wagon out of the depot, so we won't miss it (it could stay in depot forever) */
+		int d = TicksToLeaveDepot(dep);
+
+		if (d <= 0) {
+			leave->vehstatus &= ~VS_HIDDEN; // move it out of the depot
+			leave->track = TrackToTrackBits(GetRailDepotTrack(leave->tile));
+			for (int i = 0; i >= d; i--) TrainController(leave, NULL); // maybe move it, and maybe let another wagon leave
+		}
+	} else {
+		dep = NULL; // no vehicle in a depot, so no vehicle leaving a depot
+	}
+
+	Train *base = v;
+	Train *first = base; // first vehicle to move
+	Train *last = v->Last(); // last vehicle to move
+	uint length = CountVehiclesInChain(v);
+
+	/* We have to make sure all wagons that leave a depot because of train reversing are moved correctly
+	 * they have already correct spacing, so we have to make sure they are moved how they should */
+	bool nomove = (dep == NULL); // If there is no vehicle leaving a depot, limit the number of wagons moved immediately.
+
+	while (length > 2) {
+		/* we reached vehicle (originally) in front of a depot, stop now
+		 * (we would move wagons that are already moved with new wagon length). */
+		if (base == dep) break;
+
+		/* the last wagon was that one leaving a depot, so do not move it anymore */
+		if (last == dep) nomove = true;
+
+		last = last->Previous();
+		first = first->Next();
+
+		int differential = last->CalcNextVehicleOffset() - base->CalcNextVehicleOffset();
+
+		/* do not update images now */
+		for (int i = 0; i < differential; i++) TrainController(first, (nomove ? last->Next() : NULL));
+
+		base = first; // == base->Next()
+		length -= 2;
+	}
+}
+
+/**
+ * Turn a train around.
+ * @param v %Train to turn around.
+ * @param run_around If true, reverse the way original OpenTTD does: the order of
+ *                   the vehicles stays the same, so the locomotive "runs around"
+ *                   to the other end of the train. If false, reverse the way the
+ *                   decouple patch does: the whole chain is flipped and the
+ *                   locomotive stays where it is (the train is pushed).
+ * @return The front of the train after reversing (it changes when the chain is flipped).
+ */
+Train *ReverseTrainDirection(Train *v, bool run_around)
 {
 	if (IsRailDepotTile(v->tile)) {
 		InvalidateWindowData(WC_VEHICLE_DEPOT, v->tile);
@@ -1997,7 +2144,30 @@ void ReverseTrainDirection(Train *v)
 	/* Check if we were approaching a rail/road-crossing */
 	TileIndex crossing = TrainApproachingCrossingTile(v);
 
-	v = ReverseTrainVeh(v);
+	if (run_around) {
+		/* count number of vehicles */
+		int r = CountVehiclesInChain(v) - 1;  // number of vehicles - 1
+
+		AdvanceWagonsBeforeSwap(v);
+
+		/* swap start<>end, start+1<>end-1, ... */
+		int l = 0;
+		do {
+			ReverseTrainSwapVehRunAround(v, l++, r--);
+		} while (l <= r);
+
+		AdvanceWagonsAfterSwap(v);
+
+		/* The filling percentage is drawn above the front, which just moved. */
+		if (v->fill_percent_te_id != INVALID_TE_ID) {
+			HideFillingPercent(&v->fill_percent_te_id);
+			StringID percent_up_down = STR_NULL;
+			int percent = CalcPercentVehicleFilled(v, &percent_up_down);
+			v->fill_percent_te_id = ShowFillingPercent(v->x_pos, v->y_pos, v->z_pos + 20, percent, percent_up_down);
+		}
+	} else {
+		v = ReverseTrainVeh(v);
+	}
 
 	if (IsRailDepotTile(v->tile)) {
 		InvalidateWindowData(WC_VEHICLE_DEPOT, v->tile);
@@ -2012,9 +2182,12 @@ void ReverseTrainDirection(Train *v)
 
 	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
 
-	for (Train *u = v; u != NULL; u = u->Next()) {
-		SwapTrainFlags(&u->gv_flags, &u->gv_flags);
-		UpdateStatusAfterSwap(u);
+	/* The run-around swap already did this for every vehicle. */
+	if (!run_around) {
+		for (Train *u = v; u != NULL; u = u->Next()) {
+			SwapTrainFlags(&u->gv_flags, &u->gv_flags);
+			UpdateStatusAfterSwap(u);
+		}
 	}
 
 	/* update all images */
@@ -2032,7 +2205,7 @@ void ReverseTrainDirection(Train *v)
 		/* Can't be stuck here as inside a depot is always a safe tile. */
 		if (HasBit(v->flags, VRF_TRAIN_STUCK)) SetWindowWidgetDirty(WC_VEHICLE_VIEW, v->index, WID_VV_START_STOP);
 		ClrBit(v->flags, VRF_TRAIN_STUCK);
-		return;
+		return v;
 	}
 
 	/* TrainExitDir does not always produce the desired dir for depots and
@@ -2063,6 +2236,7 @@ void ReverseTrainDirection(Train *v)
 		ClrBit(v->flags, VRF_TRAIN_STUCK);
 		v->wait_counter = 0;
 	}
+	return v;
 }
 
 /**
@@ -3211,12 +3385,63 @@ bool TryPathReserve(Train *v, bool mark_as_stuck, bool first_tile_okay)
 }
 
 
+/** Data for #OtherTrainBehindEnum. */
+struct OtherTrainBehindData {
+	const Train *self; ///< The train itself.
+	const Train *last; ///< Its last vehicle.
+	int dx, dy;        ///< Unit vector of the direction the train is heading.
+};
+
+/** Find a vehicle of another (not crashed) train close behind the last vehicle. */
+static Vehicle *OtherTrainBehindEnum(Vehicle *v, void *data)
+{
+	const OtherTrainBehindData *d = (const OtherTrainBehindData *)data;
+	if (v->type != VEH_TRAIN || (v->vehstatus & VS_CRASHED)) return NULL;
+	if (Train::From(v)->First() == d->self) return NULL;
+
+	int rx = v->x_pos - d->last->x_pos;
+	int ry = v->y_pos - d->last->y_pos;
+	/* Behind means against the direction of travel, and close by. */
+	if (rx * d->dx + ry * d->dy >= 0) return NULL;
+	if (abs(rx) > 2 * TILE_SIZE || abs(ry) > 2 * TILE_SIZE) return NULL;
+	return v;
+}
+
+/**
+ * Is another train standing right behind this one on the same platform?
+ * This happens after decoupling: both parts stand in one station, so no
+ * signal separates them, and turning around would drive into the other part.
+ * @param v The train.
+ * @return true if turning around would hit another train.
+ */
+static bool IsOtherTrainBehindOnPlatform(const Train *v)
+{
+	const Train *last = v->Last();
+	if (!IsRailStationTile(last->tile)) return false;
+
+	OtherTrainBehindData d;
+	d.self = v;
+	d.last = last;
+	TileIndexDiffC diff = TileIndexDiffCByDiagDir(DirToDiagDir(last->direction));
+	d.dx = diff.x;
+	d.dy = diff.y;
+
+	if (HasVehicleOnPos(last->tile, &d, &OtherTrainBehindEnum)) return true;
+
+	TileIndex behind = TileAddByDiagDir(last->tile, ReverseDiagDir(DirToDiagDir(last->direction)));
+	if (!IsValidTile(behind) || !IsRailStationTile(behind) || GetStationIndex(behind) != GetStationIndex(last->tile)) return false;
+	return HasVehicleOnPos(behind, &d, &OtherTrainBehindEnum);
+}
+
 static bool CheckReverseTrain(const Train *v)
 {
 	if (_settings_game.difficulty.line_reverse_mode != 0 ||
 			v->track == TRACK_BIT_DEPOT) {
 		return false;
 	}
+
+	/* Never turn around into the other part of a just decoupled train. */
+	if (IsOtherTrainBehindOnPlatform(v)) return false;
 
 	assert(v->track != TRACK_BIT_NONE);
 
@@ -3297,12 +3522,26 @@ static void TrainEnterStation(Train *v, StationID station)
 	DecoupleLoad load_trains = DECOUPLE_NO_LOAD;
 	if (v->current_order.GetDestination() == station && v->current_order.GetDecouple() == ODF_DECOUPLE) {
 		u = DecoupleTrain(v);
-		SplitOrders(v, u, load_trains);
-		u->last_station_visited = station;
-		if (u == v && v->owner == _local_company) {
-			SetDParam(0, v->index);
-			AddVehicleAdviceNewsItem(STR_NEWS_ORDER_DECOUPLE_FAILED, v->index);
+		if (u == v) {
+			/* Decoupling failed (e.g. the train is too short or does not fit
+			 * the platform). Keep the orders and just stop here; the decouple
+			 * order is skipped when leaving. (Before, the orders were still
+			 * split, so a lone locomotive could lose its orders.) */
+			load_trains = DECOUPLE_LOAD_FIRST;
+			if (v->owner == _local_company) {
+				SetDParam(0, v->index);
+				AddVehicleAdviceNewsItem(STR_NEWS_ORDER_DECOUPLE_FAILED, v->index);
+			}
+		} else {
+			SplitOrders(v, u, load_trains);
+			u->last_station_visited = station;
 		}
+		/* The second part stands right behind the first one, facing it.
+		 * Always turn it around so it can never drive into the first part,
+		 * whether it loads here or not. (Before it was only turned when it
+		 * did not load, so e.g. a pushing locomotive that kept its orders
+		 * drove into the wagons it had just left.) */
+		if (u != v) u = ReverseTrainDirection(u);
 	} else {
 		load_trains = DECOUPLE_LOAD_FIRST;
 	}
@@ -3340,9 +3579,6 @@ static void TrainEnterStation(Train *v, StationID station)
 		TriggerStationAnimation(st, v->tile, SAT_TRAIN_ARRIVES);
 	}
 
-	if (u != NULL && v != u && (load_trains & DECOUPLE_LOAD_SECOND) == 0) {
-		ReverseTrainDirection(u);
-	}
 }
 
 /** Data structure for storing engine speed changes of an acceleration type. */
@@ -4354,6 +4590,91 @@ static bool TrainCoupleHandler(Train *v)
 	return true;
 }
 
+/**
+ * Execute an #OT_REVERSE order: turn the train around where it stands
+ * and continue with the next order.
+ * @param v Front of the train; its current order is the reverse order.
+ * @return The front of the train after turning around.
+ */
+static Train *ExecuteReverseOrder(Train *v)
+{
+	assert(v->current_order.IsType(OT_REVERSE));
+	bool run_around = v->current_order.GetReverseType() == ORT_RUN_AROUND;
+
+	/* The order is executed right after the previous one finished,
+	 * usually when leaving a station, so the train hardly moves. */
+	v->cur_speed = 0;
+	v->subspeed = 0;
+	ClrBit(v->flags, VRF_REVERSING);
+	ClrBit(v->flags, VRF_LEAVING_STATION);
+	v->current_order.Free();
+
+	Train *front = ReverseTrainDirection(v, run_around);
+
+	UpdateVehicleTimetable(front, true);
+	front->IncrementRealOrderIndex();
+	ProcessOrders(front);
+
+	SetWindowDirty(WC_VEHICLE_VIEW, front->index);
+	SetWindowWidgetDirty(WC_VEHICLE_VIEW, front->index, WID_VV_START_STOP);
+	return front;
+}
+
+/**
+ * Is the order before the current one a stop at the given station?
+ * Turn-around and decouple orders in between are skipped.
+ * @param v The train.
+ * @param station The station.
+ * @return true if the previous real order stops at \a station, and is not the current order itself.
+ */
+static bool PreviousOrderStopsAt(const Train *v, StationID station)
+{
+	int num = v->GetNumOrders();
+	if (num < 2) return false;
+
+	int index = v->cur_real_order_index;
+	for (int i = 0; i < num; i++) {
+		index = (index + num - 1) % num;
+		if (index == v->cur_real_order_index) return false;
+
+		const Order *o = v->GetOrder(index);
+		if (o->IsType(OT_REVERSE) || o->IsType(OT_DECOUPLE) || o->IsType(OT_IMPLICIT)) continue;
+
+		return o->IsType(OT_GOTO_STATION) && o->GetDestination() == station &&
+				(o->GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) == 0;
+	}
+	return false;
+}
+
+/**
+ * When the current order is a stop at the station the train is still standing
+ * in (for example 'go to A', 'turn around', 'go to A'), stop there right away
+ * instead of driving off and coming back.
+ * @param v Front of the train.
+ * @return true if the train started its stop at the station.
+ */
+static bool TryStopAtCurrentStation(Train *v)
+{
+	if (!v->current_order.IsType(OT_GOTO_STATION)) return false;
+	if (v->cur_speed != 0) return false;
+	if (v->current_order.GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) return false;
+
+	/* Note: last_station_visited is no help here, it was already cleared
+	 * when this order was set (see Train::GetOrderStationLocation). */
+	StationID station = v->current_order.GetDestination();
+
+	const Train *last = v->Last();
+	bool front_in = IsRailStationTile(v->tile) && GetStationIndex(v->tile) == station;
+	bool last_in = IsRailStationTile(last->tile) && GetStationIndex(last->tile) == station;
+	if (!front_in && !last_in) return false;
+
+	if (!PreviousOrderStopsAt(v, station)) return false;
+
+	ClrBit(v->flags, VRF_LEAVING_STATION);
+	TrainEnterStation(v, station);
+	return true;
+}
+
 static bool TrainLocoHandler(Train *v, bool mode)
 {
 	/* train has crashed? */
@@ -4379,7 +4700,19 @@ static bool TrainLocoHandler(Train *v, bool mode)
 	if ((v->vehstatus & VS_STOPPED) && v->cur_speed == 0) return true;
 
 	bool valid_order = !v->current_order.IsType(OT_NOTHING) && v->current_order.GetType() != OT_CONDITIONAL;
-	if (ProcessOrders(v) && CheckReverseTrain(v)) {
+	bool may_reverse = ProcessOrders(v);
+
+	/* 'Turn around' order: do it right where we are. The front changes
+	 * with the push style, so stop handling this vehicle for this tick. */
+	if (v->current_order.IsType(OT_REVERSE)) {
+		ExecuteReverseOrder(v);
+		return true;
+	}
+
+	/* Next order is the station we are standing in: stop there right away. */
+	if (TryStopAtCurrentStation(v)) return true;
+
+	if (may_reverse && CheckReverseTrain(v)) {
 		v->wait_counter = 0;
 		v->cur_speed = 0;
 		v->subspeed = 0;

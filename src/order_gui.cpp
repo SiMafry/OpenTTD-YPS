@@ -162,6 +162,8 @@ static const StringID _order_goto_dropdown_train[] = {
 	STR_ORDER_SHARE,
 	STR_ORDER_WAIT_FOR_COUPLE,
 	STR_ORDERS_GO_TO_COUPLE,
+	STR_ORDER_REVERSE_PUSH,
+	STR_ORDER_REVERSE_RUN_AROUND,
 	INVALID_STRING_ID
 };
 
@@ -388,6 +390,10 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 			SetDParam(0, STR_ORDER_WAIT_FOR_COUPLE);
 			break;
 			
+		case OT_REVERSE:
+			SetDParam(0, STR_ORDER_REVERSE_PUSH + order->GetReverseType());
+			break;
+
 		case OT_DECOUPLE: {
 			uint num_d = order->GetNumDecouple();
 			SetDParam(0, num_d == 0 ? STR_ORDER_DECOUPLE_DETAILS_AUTO : STR_ORDER_DECOUPLE_DETAILS);
@@ -833,6 +839,13 @@ private:
 		DoCommandP(this->vehicle->tile, this->vehicle->index + (this->OrderGetSel() << 20), order.Pack(), CMD_INSERT_ORDER | CMD_MSG(STR_ERROR_CAN_T_INSERT_NEW_ORDER));
 	}
 	
+	void OrderClick_Reverse(OrderReverseType reverse_type)
+	{
+		Order order;
+		order.MakeReverse(reverse_type);
+		DoCommandP(this->vehicle->tile, this->vehicle->index + (this->OrderGetSel() << 20), order.Pack(), CMD_INSERT_ORDER | CMD_MSG(STR_ERROR_CAN_T_INSERT_NEW_ORDER));
+	}
+
 	void OrderClick_Couple()
 	{
 		Order order;
@@ -1572,6 +1585,8 @@ public:
 					case 3: this->OrderClick_Goto(OPOS_SHARE); break;
 					case 4: this->OrderClick_WaitForCouple(); break;
 					case 5: this->OrderClick_Couple(); break;
+					case 6: this->OrderClick_Reverse(ORT_PUSH); break;
+					case 7: this->OrderClick_Reverse(ORT_RUN_AROUND); break;
 					default: NOT_REACHED();
 				}
 				break;

@@ -156,6 +156,18 @@ void Order::MakeWaitCouple()
 }
 
 /**
+ * Makes this order a Reverse order.
+ * @param reverse_type how to turn the train around.
+ */
+void Order::MakeReverse(OrderReverseType reverse_type)
+{
+	this->type = OT_REVERSE;
+	this->flags = 0;
+	this->dest = 0;
+	this->SetReverseType(reverse_type);
+}
+
+/**
  * Makes this order a Dummy order.
  */
 void Order::MakeDummy()
@@ -942,6 +954,14 @@ CommandCost CmdInsertOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 		
 		case OT_DECOUPLE: {
 			// TODO check for previous order to be station with decouple
+			break;
+		}
+
+		case OT_REVERSE: {
+			if (v->type != VEH_TRAIN) return CMD_ERROR;
+			if (new_order.GetReverseType() >= ORT_END) return CMD_ERROR;
+			/* Only the reverse type may be set; no destination, non-stop or other flags. */
+			if (new_order.Pack() != Order(new_order.Pack() & 0x10F).Pack() || GB(new_order.Pack(), 4, 4) != 0) return CMD_ERROR;
 			break;
 		}
 
