@@ -17,8 +17,13 @@
 #include <windows.h>
 #include <fcntl.h>
 #include <regstr.h>
+/* Newer MinGW headers declare SORT_ASCENDING/SORT_DESCENDING, which clash with fios.h. */
+#define SORT_ASCENDING WIN32_SORT_ASCENDING
+#define SORT_DESCENDING WIN32_SORT_DESCENDING
 #include <shlobj.h> /* SHGetFolderPath */
 #include <shellapi.h>
+#undef SORT_ASCENDING
+#undef SORT_DESCENDING
 #include "win32.h"
 #include "../../fios.h"
 #include "../../core/alloc_func.hpp"
