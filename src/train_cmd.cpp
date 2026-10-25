@@ -4609,11 +4609,14 @@ static Train *ExecuteReverseOrder(Train *v)
 	ClrBit(v->flags, VRF_LEAVING_STATION);
 	v->current_order.Free();
 
-	Train *front = ReverseTrainDirection(v, run_around);
+	/* Move on to the next order *before* turning around: turning around
+	 * reserves a path, and without a destination that path would lead to the
+	 * nearest safe tile, often a depot, which the train then drove through. */
+	UpdateVehicleTimetable(v, true);
+	v->IncrementRealOrderIndex();
+	ProcessOrders(v);
 
-	UpdateVehicleTimetable(front, true);
-	front->IncrementRealOrderIndex();
-	ProcessOrders(front);
+	Train *front = ReverseTrainDirection(v, run_around);
 
 	SetWindowDirty(WC_VEHICLE_VIEW, front->index);
 	SetWindowWidgetDirty(WC_VEHICLE_VIEW, front->index, WID_VV_START_STOP);
