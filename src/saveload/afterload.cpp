@@ -60,6 +60,7 @@
 #include "saveload_internal.h"
 
 #include <signal.h>
+#include <algorithm>
 
 #include "../safeguards.h"
 
@@ -3010,6 +3011,67 @@ bool AfterLoadGame()
 				}
 				num_order++;
 			}
+		}
+	}
+
+	/* Repair games saved after a train was reversed while loading: older
+	 * versions of the decouple patch left the old front vehicle (now a wagon)
+	 * registered as loading at the station, which later asserts in
+	 * LoadUnloadVehicle(). Remove such entries and settle their payments. */
+	{
+		Station *st;
+		FOR_ALL_STATIONS(st) {
+			std::list<Vehicle *>::iterator it = st->loading_vehicles.begin();
+			while (it != st->loading_vehicles.end()) {
+				Vehicle *v = *it;
+				if (v->IsPrimaryVehicle() && v->current_order.IsType(OT_LOADING)) {
+					++it;
+					continue;
+				}
+
+				Vehicle *front = v->First();
+				bool front_listed = std::find(st->loading_vehicles.begin(), st->loading_vehicles.end(), front) != st->loading_vehicles.end();
+				if (front != v && !front_listed && front->current_order.IsType(OT_LOADING) && front->last_station_visited == st->index) {
+					/* The real train is still loading here: let it take over. */
+					*it = front;
+					if (front->cargo_payment == NULL && v->cargo_payment != NULL) {
+						front->cargo_payment = v->cargo_payment;
+						front->cargo_payment->front = front;
+						v->cargo_payment = NULL;
+					}
+					if (v->current_order.IsType(OT_LOADING)) v->current_order.Free();
+					++it;
+					continue;
+				}
+
+				/* Stale entry: settle what was earned so far without the
+				 * sound and animation the normal payment would produce. */
+				CargoPayment *cp = v->cargo_payment;
+				if (cp != NULL) {
+					Backup<CompanyByte> cur_company(_current_company, front->owner, FILE_LINE);
+					SubtractMoneyFromCompany(CommandCost(front->GetExpenseType(true), -cp->route_profit));
+					cur_company.Restore();
+					front->profit_this_year += (cp->visual_profit + cp->visual_transfer) << 8;
+					cp->visual_profit = 0;
+					cp->visual_transfer = 0;
+					delete cp; // clears v->cargo_payment
+				}
+				if (v->current_order.IsType(OT_LOADING)) {
+					if (v->IsPrimaryVehicle()) {
+						v->current_order.MakeLeaveStation();
+					} else {
+						v->current_order.Free();
+					}
+				}
+				it = st->loading_vehicles.erase(it);
+			}
+		}
+
+		/* Wagons can't load; drop leftover loading orders and payments. */
+		Vehicle *v;
+		FOR_ALL_VEHICLES(v) {
+			if (v->IsPrimaryVehicle() || v->type != VEH_TRAIN) continue;
+			if (v->current_order.IsType(OT_LOADING)) v->current_order.Free();
 		}
 	}
 

@@ -35,6 +35,9 @@
 #include "order_backup.h"
 #include "zoom_func.h"
 #include "newgrf_debug.h"
+#include "station_base.h"
+#include "economy_base.h"
+#include "texteff.hpp"
 
 #include "table/strings.h"
 #include "table/train_cmd.h"
@@ -1768,6 +1771,49 @@ void ReverseTrainOrientation(Train *v)
 	}
 }
 
+/**
+ * Move the station-loading state from the old front vehicle to the new one.
+ * Reversing a train in this patch makes the last vehicle the new front, so
+ * everything that belongs to "the train that is loading" has to move along:
+ * the station's list of loading vehicles, the cargo payment, the filling
+ * percentage text and the load/unload timer. Without this the old front
+ * (now an ordinary wagon) stays registered as loading at the station, its
+ * percentage text stays on the platform, and the next load at that station
+ * asserts in LoadUnloadVehicle().
+ * @param old_front Vehicle that was the front before the reversal.
+ * @param new_front Vehicle that is the front now.
+ */
+static void TransferLoadingState(Train *old_front, Train *new_front)
+{
+	if (old_front == new_front) return;
+
+	/* The filling percentage text is drawn at the front's position; drop the
+	 * old one, the next loading step creates a new one above the new front. */
+	HideFillingPercent(&old_front->fill_percent_te_id);
+	HideFillingPercent(&new_front->fill_percent_te_id);
+
+	new_front->load_unload_ticks = old_front->load_unload_ticks;
+	new_front->last_loading_station = old_front->last_loading_station;
+
+	if (old_front->cargo_payment != NULL) {
+		assert(new_front->cargo_payment == NULL);
+		new_front->cargo_payment = old_front->cargo_payment;
+		new_front->cargo_payment->front = new_front;
+		old_front->cargo_payment = NULL;
+	}
+
+	/* Replace the old front in every station loading list it is in. */
+	Station *st;
+	FOR_ALL_STATIONS(st) {
+		for (std::list<Vehicle *>::iterator it = st->loading_vehicles.begin(); it != st->loading_vehicles.end(); ++it) {
+			if (*it == old_front) *it = new_front;
+		}
+	}
+
+	/* The old front is just a wagon now; it must not look like it is loading. */
+	if (old_front->current_order.IsType(OT_LOADING)) old_front->current_order.Free();
+}
+
 static Train *ReverseTrainVeh(Train *v)
 {
 	ReverseTrainArticulated(v);
@@ -1806,6 +1852,7 @@ static Train *ReverseTrainVeh(Train *v)
 	}
 
 	new_front->CopyVehicleConfigAndStatistics(v);
+	TransferLoadingState(v, new_front);
 	ChangeVehicleViewports(v->index, new_front->index);
 	ChangeVehicleViewWindow(v->index, new_front->index);
 	ChangeVehicleNews(v->index, new_front->index);
@@ -4251,7 +4298,8 @@ static Train *GetCouplePosition(Train *v, bool &reverse)
 
 	if (other_vehicle == NULL) return NULL;
 	if (other_vehicle->First()->index == v->index) return NULL;
-	if (!other_vehicle->current_order.IsType(OT_WAIT_COUPLE)) return NULL;
+	/* Check the order of the train, not of whichever of its vehicles we ran into. */
+	if (!other_vehicle->First()->current_order.IsType(OT_WAIT_COUPLE)) return NULL;
 	Train *u = Train::From(other_vehicle)->First();
 	if (!TrainFitStation(u)) return NULL;
 
