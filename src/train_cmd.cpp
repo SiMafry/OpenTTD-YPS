@@ -1787,13 +1787,27 @@ static void TransferLoadingState(Train *old_front, Train *new_front)
 {
 	if (old_front == new_front) return;
 
-	/* The filling percentage text is drawn at the front's position; drop the
-	 * old one, the next loading step creates a new one above the new front. */
-	HideFillingPercent(&old_front->fill_percent_te_id);
+	/* The filling percentage text is drawn at the front's position;
+	 * move it right away to the new front, the other end of the train. */
 	HideFillingPercent(&new_front->fill_percent_te_id);
+	if (old_front->fill_percent_te_id != INVALID_TE_ID) {
+		HideFillingPercent(&old_front->fill_percent_te_id);
+		StringID percent_up_down = STR_NULL;
+		int percent = CalcPercentVehicleFilled(new_front, &percent_up_down);
+		new_front->fill_percent_te_id = ShowFillingPercent(new_front->x_pos, new_front->y_pos, new_front->z_pos + 20, percent, percent_up_down);
+	}
 
 	new_front->load_unload_ticks = old_front->load_unload_ticks;
 	new_front->last_loading_station = old_front->last_loading_station;
+
+	/* Loading progress flags belong to the front only. The new front is a
+	 * former wagon whose copies of these bits are stale; a stale "loading
+	 * finished" would make the train leave and skip to its next order. */
+	static const VehicleFlags front_only_flags[] = { VF_LOADING_FINISHED, VF_STOP_LOADING, VF_PATHFINDER_LOST };
+	for (uint i = 0; i < lengthof(front_only_flags); i++) {
+		SB(new_front->vehicle_flags, front_only_flags[i], 1, HasBit(old_front->vehicle_flags, front_only_flags[i]) ? 1 : 0);
+		ClrBit(old_front->vehicle_flags, front_only_flags[i]);
+	}
 
 	if (old_front->cargo_payment != NULL) {
 		assert(new_front->cargo_payment == NULL);
@@ -2108,8 +2122,12 @@ CommandCost CmdReverseTrainDirection(TileIndex tile, DoCommandFlag flags, uint32
 				const Vehicle *last = v;
 				while (last->Next() != NULL) last = last->Next();
 
-				/* not a station || different station --> leave the station */
-				if (!IsTileType(last->tile, MP_STATION) || GetStationIndex(last->tile) != GetStationIndex(v->tile)) {
+				/* Neither end of the train in the station it is loading at --> leave the station.
+				 * Reversing in place keeps loading, as the new front takes over the loading state. */
+				StationID loading_at = v->last_station_visited;
+				bool front_in = IsTileType(v->tile, MP_STATION) && GetStationIndex(v->tile) == loading_at;
+				bool last_in = IsTileType(last->tile, MP_STATION) && GetStationIndex(last->tile) == loading_at;
+				if (!front_in && !last_in) {
 					v->LeaveStation();
 				}
 			}

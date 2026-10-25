@@ -1612,7 +1612,12 @@ static void LoadUnloadVehicle(Vehicle *front)
 	/* We have not waited enough time till the next round of loading/unloading */
 	if (front->load_unload_ticks != 0) return;
 
-	if (front->type == VEH_TRAIN && (!IsTileType(front->tile, MP_STATION) || GetStationIndex(front->tile) != st->index)) {
+	/* A reversed train may stick out of the platform with its new front;
+	 * keep loading as long as one of its ends is still in the station. */
+	const Vehicle *last = front->Last();
+	if (front->type == VEH_TRAIN &&
+			(!IsTileType(front->tile, MP_STATION) || GetStationIndex(front->tile) != st->index) &&
+			(!IsTileType(last->tile, MP_STATION) || GetStationIndex(last->tile) != st->index)) {
 		/* The train reversed in the station. Take the "easy" way
 		 * out and let the train just leave as it always did. */
 		SetBit(front->vehicle_flags, VF_LOADING_FINISHED);
