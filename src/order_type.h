@@ -103,7 +103,8 @@ enum OrderDecoupleOrdersFlags {
 	ODOF_KEEP_ORDERS_NO_LOAD = 1,
 	ODOF_INHERIT_ORDERS      = 2,
 	ODOF_WAIT_FOR_COUPLE     = 3,
-	ODOF_END                 = 4,
+	ODOF_OWN_ORDERS          = 4, ///< Get back the orders the part had before it was coupled.
+	ODOF_END                 = 5,
 };
 
 /**

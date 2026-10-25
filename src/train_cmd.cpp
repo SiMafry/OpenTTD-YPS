@@ -39,6 +39,9 @@
 #include "economy_base.h"
 #include "texteff.hpp"
 #include "timetable.h"
+#include "group.h"
+#include "depot_base.h"
+#include "waypoint_base.h"
 
 #include "table/strings.h"
 #include "table/train_cmd.h"
@@ -2466,6 +2469,175 @@ static bool TryTrainDecouple(Train *v, Train *u)
 	return true;
 }
 
+/**
+ * Forget the saved own orders ("drawer") of this vehicle, if any.
+ */
+void Train::ClearCoupledOrders()
+{
+	Order *o = this->drawer_orders;
+	while (o != NULL) {
+		Order *next = o->next;
+		delete o;
+		o = next;
+	}
+	this->drawer_orders = NULL;
+	this->drawer_neighbour = INVALID_VEHICLE;
+	this->drawer_share_with = INVALID_VEHICLE;
+	this->drawer_real_index = 0;
+	this->drawer_impl_index = 0;
+	this->drawer_group = DEFAULT_GROUP;
+}
+
+/**
+ * When a waiting train is coupled to another one, keep a copy of its own orders
+ * ("drawer") on its first vehicle, so it can get them back when it is decoupled
+ * at the same place later (decouple option "Own orders").
+ * @param part First vehicle of the part being coupled; still has its orders.
+ * @param neighbour The vehicle it is coupled to (last vehicle of the train in front).
+ */
+static void SaveCoupledOrders(Train *part, const Train *neighbour)
+{
+	part->ClearCoupledOrders();
+
+	int num = part->GetNumOrders();
+	if (num == 0 || !Order::CanAllocateItem(num)) return;
+
+	Order *first = NULL;
+	Order *last = NULL;
+	const Order *o;
+	FOR_VEHICLE_ORDERS(part, o) {
+		Order *copy = new Order();
+		copy->AssignOrder(*o);
+		copy->next = NULL;
+		if (last == NULL) {
+			first = copy;
+		} else {
+			last->next = copy;
+		}
+		last = copy;
+	}
+
+	part->drawer_orders = first;
+	part->drawer_neighbour = neighbour->index;
+	part->drawer_real_index = part->cur_real_order_index;
+	part->drawer_impl_index = part->cur_implicit_order_index;
+	part->drawer_group = part->group_id;
+
+	part->drawer_share_with = INVALID_VEHICLE;
+	for (const Vehicle *w = part->FirstShared(); w != NULL; w = w->NextShared()) {
+		if (w != part) {
+			part->drawer_share_with = w->index;
+			break;
+		}
+	}
+}
+
+/**
+ * Does the order list of a vehicle still look like the saved orders?
+ * @param v The vehicle.
+ * @param saved First saved order.
+ * @return true if both have the same orders.
+ */
+static bool OrdersMatchSaved(const Vehicle *v, const Order *saved)
+{
+	const Order *o = v->GetFirstOrder();
+	while (o != NULL && saved != NULL) {
+		if (!o->Equals(*saved)) return false;
+		o = o->next;
+		saved = saved->next;
+	}
+	return o == NULL && saved == NULL;
+}
+
+/**
+ * Is the destination of a saved order still there?
+ * @param o The order.
+ * @param owner Owner of the train.
+ * @return false if the order points to something that was removed.
+ */
+static bool IsSavedOrderDestinationValid(const Order *o, Owner owner)
+{
+	switch (o->GetType()) {
+		case OT_GOTO_STATION:
+		case OT_IMPLICIT:
+			return Station::IsValidID(o->GetDestination());
+		case OT_GOTO_WAYPOINT:
+			return Waypoint::IsValidID(o->GetDestination());
+		case OT_GOTO_DEPOT:
+			if (o->GetDepotActionType() & ODATFB_NEAREST_DEPOT) return true;
+			return Depot::IsValidID(o->GetDestination());
+		default:
+			return true;
+	}
+}
+
+/**
+ * Find the vehicle that holds the saved own orders of a part of a just decoupled train.
+ * The part only gets its orders back when the train was cut exactly where the
+ * part was coupled.
+ * @param inner_end The vehicle of the part at the cut.
+ * @param other_end The vehicle of the other part at the cut.
+ * @return The vehicle with the saved orders, or NULL.
+ */
+static Train *FindCoupledOrders(Train *inner_end, const Train *other_end)
+{
+	if (inner_end->drawer_orders == NULL) return NULL;
+	if (inner_end->drawer_neighbour != other_end->index) return NULL;
+	return inner_end;
+}
+
+/**
+ * Give a part of a decoupled train back the orders it had before it was coupled.
+ * @param t Front of the part.
+ * @param drawer Vehicle of the part holding the saved orders.
+ * @return true if the orders were restored.
+ */
+static bool RestoreCoupledOrders(Train *t, Train *drawer)
+{
+	int num = 0;
+	for (const Order *o = drawer->drawer_orders; o != NULL; o = o->next) num++;
+	if (num == 0) return false;
+
+	DeleteVehicleOrders(t, false, true);
+	t->current_order.Free();
+
+	/* Share again with the vehicle it shared with, if that one still has the same orders. */
+	Vehicle *share = Vehicle::GetIfValid(drawer->drawer_share_with);
+	if (share != NULL && share != t && share->type == VEH_TRAIN && share->IsPrimaryVehicle() &&
+			share->owner == t->owner && share->orders.list != NULL && OrdersMatchSaved(share, drawer->drawer_orders)) {
+		t->orders.list = share->orders.list;
+		t->AddToShared(share);
+	} else {
+		if (!Order::CanAllocateItem(num)) return false;
+		if (t->orders.list == NULL && !OrderList::CanAllocateItem()) return false;
+
+		int index = 0;
+		for (const Order *o = drawer->drawer_orders; o != NULL; o = o->next, index++) {
+			Order *copy = new Order();
+			copy->AssignOrder(*o);
+			if (!IsSavedOrderDestinationValid(copy, t->owner)) copy->MakeDummy();
+			InsertOrder(t, copy, index);
+		}
+	}
+
+	/* Continue where it was when it was coupled, after its 'wait for couple' order. */
+	t->cur_real_order_index = drawer->drawer_real_index < t->GetNumOrders() ? drawer->drawer_real_index : 0;
+	t->cur_implicit_order_index = drawer->drawer_impl_index < t->GetNumOrders() ? drawer->drawer_impl_index : 0;
+	const Order *current = t->GetOrder(t->cur_real_order_index);
+	if (current != NULL && current->IsType(OT_WAIT_COUPLE)) t->IncrementImplicitOrderIndex();
+
+	GroupID g = drawer->drawer_group;
+	if (!IsDefaultGroupID(g) && Group::IsValidID(g) && Group::Get(g)->owner == t->owner && Group::Get(g)->vehicle_type == VEH_TRAIN) {
+		GroupStatistics::CountVehicle(t, -1);
+		SetTrainGroupID(t, g);
+		GroupStatistics::CountVehicle(t, 1);
+	}
+
+	drawer->ClearCoupledOrders();
+	InvalidateVehicleOrder(t, VIWD_REMOVE_ALL_ORDERS);
+	return true;
+}
+
 void InheritWaitForCoupleOrders(Train *v, Train *u)
 {
 	if (!Order::CanAllocateItem(3)) return;
@@ -2518,8 +2690,29 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 	Order *after_decouple_flags = v->orders.list->GetOrderAt(v->cur_implicit_order_index + 1);
 	assert(after_decouple_flags->GetType() == OT_DECOUPLE);
 
+	/* Copy the flags; the order itself may go away when the first part changes its orders. */
+	OrderDecoupleOrdersFlags first_type = after_decouple_flags->GetDecoupleFirstOrdersType();
+	OrderDecoupleOrdersFlags second_type = after_decouple_flags->GetDecoupleSecondOrdersType();
+
+	/* Saved own orders of the parts, found at the cut. */
+	Train *first_drawer = NULL;
+	Train *second_drawer = NULL;
 	if (v != u) {
-		switch (after_decouple_flags->GetDecoupleSecondOrdersType()) {
+		Train *a = v->Last(); // last vehicle of the first part
+		first_drawer = FindCoupledOrders(a, u);
+		second_drawer = FindCoupledOrders(u, a);
+	}
+
+	if (v != u) {
+		if (second_type == ODOF_OWN_ORDERS) {
+			if (second_drawer == NULL || !RestoreCoupledOrders(u, second_drawer)) {
+				/* Nothing saved for this cut: just wait. */
+				CreateWaitForCoupleOrder(u);
+			}
+			ProcessOrders(u);
+		}
+		switch (second_type == ODOF_OWN_ORDERS ? ODOF_END : second_type) {
+			case ODOF_END: break; // handled above
 			case ODOF_KEEP_ORDERS:
 				load_trains |= DECOUPLE_LOAD_SECOND;
 				u->orders.list = v->orders.list;
@@ -2545,10 +2738,10 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 				break;
 			default: NOT_REACHED();
 		}
-		ProcessOrders(u);
+		if (second_type != ODOF_OWN_ORDERS) ProcessOrders(u);
 	}
 
-	switch (after_decouple_flags->GetDecoupleFirstOrdersType()) {
+	switch (first_type) {
 		case ODOF_KEEP_ORDERS:
 			load_trains |= DECOUPLE_LOAD_FIRST;
 			break;
@@ -2562,6 +2755,12 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 		case ODOF_WAIT_FOR_COUPLE:
 			DeleteVehicleOrders(v, false, true);
 			CreateWaitForCoupleOrder(v);
+			break;
+		case ODOF_OWN_ORDERS:
+			if (first_drawer == NULL || !RestoreCoupledOrders(v, first_drawer)) {
+				DeleteVehicleOrders(v, false, true);
+				CreateWaitForCoupleOrder(v);
+			}
 			break;
 		default: NOT_REACHED();
 	}
@@ -4524,6 +4723,9 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	DeleteNewGRFInspectWindow(GSF_TRAINS, u->index);
 	SetWindowDirty(WC_COMPANY, _current_company);
 	
+	/* Keep the own orders of the coupled part, to give them back when decoupling. */
+	SaveCoupledOrders(u, v_last);
+
 	DeleteVehicleOrders(u);
 	RemoveVehicleFromGroup(u);
 	u->unitnumber = 0;

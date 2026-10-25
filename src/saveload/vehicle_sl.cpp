@@ -733,6 +733,13 @@ const SaveLoad *GetVehicleDescription(VehicleType vt)
 		 SLE_CONDVAR(Train, parent_consist_cargo,SLE_UINT32,                 200, SL_MAX_VERSION),
 		 SLE_CONDVAR(Train, first_engine_type,   SLE_UINT16,                 200, SL_MAX_VERSION),
 
+		 SLE_CONDREF(Train, drawer_orders,       REF_ORDER,                  201, SL_MAX_VERSION),
+		 SLE_CONDVAR(Train, drawer_neighbour,    SLE_UINT32,                 201, SL_MAX_VERSION),
+		 SLE_CONDVAR(Train, drawer_share_with,   SLE_UINT32,                 201, SL_MAX_VERSION),
+		 SLE_CONDVAR(Train, drawer_real_index,   SLE_UINT8,                  201, SL_MAX_VERSION),
+		 SLE_CONDVAR(Train, drawer_impl_index,   SLE_UINT8,                  201, SL_MAX_VERSION),
+		 SLE_CONDVAR(Train, drawer_group,        SLE_UINT16,                 201, SL_MAX_VERSION),
+
 		SLE_CONDNULL(2, 2, 19),
 		 SLE_CONDVAR(Train, gv_flags,            SLE_UINT16,                 139, SL_MAX_VERSION),
 		SLE_CONDNULL(11, 2, 143), // old reserved space

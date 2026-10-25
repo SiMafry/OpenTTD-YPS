@@ -3813,6 +3813,7 @@ STR_ORDERS_DECOUPLE_KEEP_ORDERS                                 :Keep orders
 STR_ORDERS_DECOUPLE_KEEP_ORDERS_NO_LOAD                         :Keep and no loading
 STR_ORDERS_DECOUPLE_INHERIT_ORDERS                              :Inherit
 STR_ORDERS_DECOUPLE_WAIT_FOR_COUPLE                             :Wait for couple
+STR_ORDERS_DECOUPLE_OWN_ORDERS                                  :Own orders
 
 STR_ORDER_CONDITIONAL_VARIABLE_TOOLTIP                          :{BLACK}Vehicle data to base jumping on
 
@@ -3927,6 +3928,7 @@ STR_ORDER_DECOUPLE_KEEP_ORDERS                                  :(Keep orders)
 STR_ORDER_DECOUPLE_KEEP_ORDERS_NO_LOAD                          :(Keep orders without loading/unloading)
 STR_ORDER_DECOUPLE_INHERIT_ORDERS                               :(Inherit orders)
 STR_ORDER_DECOUPLE_WAIT_FOR_COUPLE                              :(Wait for couple)
+STR_ORDER_DECOUPLE_OWN_ORDERS                                   :(Own orders)
 
 STR_ORDER_AUTO_REFIT                                            :(Refit to {STRING})
 STR_ORDER_FULL_LOAD_REFIT                                       :(Full load with refit to {STRING})

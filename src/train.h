@@ -114,10 +114,27 @@ struct Train FINAL : public GroundVehicle<Train, VEH_TRAIN> {
 	/** Ticks waiting in front of a signal, ticks being stuck or a counter for forced proceeding through signals. */
 	uint16 wait_counter;
 
+	/**
+	 * Saved own orders ("drawer") of a part of the train that was coupled to it.
+	 * Only set on the first vehicle of the coupled part; see SaveCoupledOrders().
+	 */
+	Order *drawer_orders;              ///< Copies of the orders of the coupled part, NULL if there are none.
+	VehicleID drawer_neighbour;        ///< The vehicle the part was coupled to; the part is cut off there again.
+	VehicleID drawer_share_with;       ///< A vehicle that shared these orders when coupling, INVALID_VEHICLE if none.
+	VehicleOrderID drawer_real_index;  ///< Real order index of the part when coupling.
+	VehicleOrderID drawer_impl_index;  ///< Implicit order index of the part when coupling.
+	GroupID drawer_group;              ///< Group of the part when coupling.
+
 	/** We don't want GCC to zero our struct! It already is zeroed and has an index! */
 	Train() : GroundVehicleBase() {}
 	/** We want to 'destruct' the right class. */
-	virtual ~Train() { this->PreDestructor(); }
+	virtual ~Train()
+	{
+		if (!Train::CleaningPool()) this->ClearCoupledOrders();
+		this->PreDestructor();
+	}
+
+	void ClearCoupledOrders();
 
 	friend struct GroundVehicle<Train, VEH_TRAIN>; // GroundVehicle needs to use the acceleration functions defined at Train.
 

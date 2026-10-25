@@ -27,6 +27,7 @@
 #include "waypoint_base.h"
 #include "company_base.h"
 #include "order_backup.h"
+#include "train.h"
 #include "cheat_type.h"
 
 #include "table/strings.h"
@@ -2068,6 +2069,17 @@ restart:
 					InvalidateVehicleOrder(w, (INVALID_VEH_ORDER_ID << 8) | id);
 				}
 			}
+		}
+	}
+
+	/* Also in the saved own orders of coupled train parts. */
+	Train *t;
+	FOR_ALL_TRAINS(t) {
+		for (Order *o = t->drawer_orders; o != NULL; o = o->next) {
+			OrderType ot = o->GetType();
+			if (ot == OT_GOTO_DEPOT && (o->GetDepotActionType() & ODATFB_NEAREST_DEPOT) != 0) continue;
+			if (ot == OT_IMPLICIT) ot = OT_GOTO_STATION;
+			if (ot == type && o->GetDestination() == destination) o->MakeDummy();
 		}
 	}
 
