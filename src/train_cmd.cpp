@@ -4747,10 +4747,64 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	if (CheckReverseTrain(v)) SetBit(v->flags, VRF_REVERSING);
 }
 
+/** Data for #WaitingTrainAheadEnum. */
+struct WaitingTrainAheadData {
+	const Train *self; ///< The coupling train.
+	int dx, dy;        ///< Unit vector of its direction.
+	const Train *best; ///< Closest vehicle of a waiting train found so far.
+	int best_dist;     ///< Its distance.
+};
+
+/** Find a vehicle of a train waiting for coupling, ahead of the coupling train. */
+static Vehicle *WaitingTrainAheadEnum(Vehicle *v, void *data)
+{
+	WaitingTrainAheadData *d = (WaitingTrainAheadData *)data;
+	if (v->type != VEH_TRAIN || (v->vehstatus & VS_CRASHED)) return NULL;
+	const Train *first = Train::From(v)->First();
+	if (first == d->self || !first->current_order.IsType(OT_WAIT_COUPLE)) return NULL;
+
+	int dist = (v->x_pos - d->self->x_pos) * d->dx + (v->y_pos - d->self->y_pos) * d->dy;
+	if (dist < 0) return NULL;
+	if (d->best == NULL || dist < d->best_dist) {
+		d->best = Train::From(v);
+		d->best_dist = dist;
+	}
+	return NULL;
+}
+
+/**
+ * Find a train waiting for coupling right in front of a train.
+ * Used when following the path reservation does not lead to it, e.g. because
+ * the waiting train has itself reserved a piece of track beyond its front,
+ * so the followed reservation ends behind the waiting train.
+ * @param v The coupling train.
+ * @return A vehicle of the waiting train, or NULL.
+ */
+static Vehicle *FindWaitingTrainAhead(const Train *v)
+{
+	WaitingTrainAheadData d;
+	d.self = v;
+	TileIndexDiffC diff = TileIndexDiffCByDiagDir(DirToDiagDir(v->direction));
+	d.dx = diff.x;
+	d.dy = diff.y;
+	d.best = NULL;
+	d.best_dist = 0;
+
+	FindVehicleOnPos(v->tile, &d, &WaitingTrainAheadEnum);
+	TileIndex ahead = TileAddByDiagDir(v->tile, DirToDiagDir(v->direction));
+	if (IsValidTile(ahead)) FindVehicleOnPos(ahead, &d, &WaitingTrainAheadEnum);
+	return const_cast<Train *>(d.best);
+}
+
 static Train *GetCouplePosition(Train *v, bool &reverse)
 {
 	Vehicle *other_vehicle = NULL;
 	FollowTrainReservation(v, v->tile, v->GetVehicleTrackdir(), &other_vehicle);
+
+	/* The reservation may lead past the waiting train; then look right in front of us. */
+	if (other_vehicle == NULL || other_vehicle->First() == v || !other_vehicle->First()->current_order.IsType(OT_WAIT_COUPLE)) {
+		other_vehicle = FindWaitingTrainAhead(v);
+	}
 
 	if (other_vehicle == NULL) return NULL;
 	if (other_vehicle->First()->index == v->index) return NULL;
