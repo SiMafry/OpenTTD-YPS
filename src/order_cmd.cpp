@@ -1415,11 +1415,11 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 			break;
 			
 		case OT_GOTO_COUPLE:
-			if (mof != MOF_COUPLE_LOAD && mof != MOF_COUPLE_CARGO && mof != MOF_COUPLE_VALUE) return CMD_ERROR;
+			if (mof != MOF_COUPLE_LOAD && mof != MOF_COUPLE_CARGO && mof != MOF_COUPLE_VALUE && mof != MOF_COUPLE_SAME_DEST) return CMD_ERROR;
 			break;
 
 		case OT_DECOUPLE:
-			if (mof != MOF_FIRST_ORDERS && mof != MOF_SECOND_ORDERS && mof != MOF_DECOUPLE_VALUE) return CMD_ERROR;
+			if (mof != MOF_FIRST_ORDERS && mof != MOF_SECOND_ORDERS && mof != MOF_DECOUPLE_VALUE && mof != MOF_DECOUPLE_SORT) return CMD_ERROR;
 			break;
 
 		default:
@@ -1523,6 +1523,11 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 		
 		case MOF_COUPLE_VALUE:
 			if (data > 127) return CMD_ERROR;
+			break;
+
+		case MOF_COUPLE_SAME_DEST:
+		case MOF_DECOUPLE_SORT:
+			if (data > 1) return CMD_ERROR;
 			break;
 	}
 
@@ -1646,6 +1651,14 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 				
 			case MOF_COUPLE_VALUE:
 				order->SetNumCouple(data);
+				break;
+
+			case MOF_COUPLE_SAME_DEST:
+				order->SetCoupleSameDestination(data != 0);
+				break;
+
+			case MOF_DECOUPLE_SORT:
+				order->SetDecoupleSort(data != 0);
 				break;
 
 			case MOF_FIRST_ORDERS:

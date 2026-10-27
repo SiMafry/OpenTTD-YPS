@@ -46,6 +46,8 @@ enum OrderWidgets {
 	WID_O_COUPLE_VALUE,              ///< Select number of units for coupling
 	WID_O_ORDERS_FIRST,              ///< Select orders for first part of decoupled train
 	WID_O_ORDERS_SECOND,             ///< Select orders for second part of decoupled train
+	WID_O_COUPLE_SAME_DEST,          ///< Toggle: couple only trains going to the same next station
+	WID_O_DECOUPLE_SORT,             ///< Toggle: sort the train in a shunting yard
 };
 
 #endif /* WIDGETS_ORDER_WIDGET_H */

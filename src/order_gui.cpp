@@ -384,6 +384,7 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 				SetDParam(5, STR_ORDER_COUPLE_UNITS);
 				SetDParam(6, num_d);
 			}
+			if (order->GetCoupleSameDestination()) SetDParam(8, STR_ORDER_COUPLE_SAME_DEST);
 			break;
 		}
 		
@@ -396,6 +397,10 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 			break;
 
 		case OT_DECOUPLE: {
+			if (order->GetDecoupleSort()) {
+				SetDParam(0, STR_ORDER_DECOUPLE_SORT_DETAILS);
+				break;
+			}
 			uint num_d = order->GetNumDecouple();
 			SetDParam(0, num_d == 0 ? STR_ORDER_DECOUPLE_DETAILS_AUTO : STR_ORDER_DECOUPLE_DETAILS);
 			SetDParam(1, num_d);
@@ -1195,6 +1200,7 @@ public:
 					//left_sel->SetDisplayedPlane(DP_LEFT_COUPLE_LOAD);
 					this->SetWidgetLoweredState(WID_O_COUPLE_LOAD, order->GetCoupleLoad() == ODC_IS_EMPTY);
 					this->SetWidgetLoweredState(WID_O_COUPLE_CARGO, order->HasCoupleCargoType());
+				this->SetWidgetLoweredState(WID_O_COUPLE_SAME_DEST, order->GetCoupleSameDestination());
 					this->DisableWidget(WID_O_COND_VALUE);
 					this->DisableWidget(WID_O_DECOUPLE);
 					break;
@@ -1203,6 +1209,10 @@ public:
 				case OT_DECOUPLE: {
 					assert(this->vehicle->type == VEH_TRAIN);
 					train_row_sel->SetDisplayedPlane(DP_GROUNDVEHICLE_ROW_DECOUPLE);
+					this->SetWidgetLoweredState(WID_O_DECOUPLE_SORT, order->GetDecoupleSort());
+					this->SetWidgetDisabledState(WID_O_ORDERS_FIRST, order->GetDecoupleSort());
+					this->SetWidgetDisabledState(WID_O_ORDERS_SECOND, order->GetDecoupleSort());
+					this->SetWidgetDisabledState(WID_O_DECOUPLE_VALUE, order->GetDecoupleSort());
 					this->DisableWidget(WID_O_DECOUPLE);
 					this->DisableWidget(WID_O_DELETE);
 					break;
@@ -1500,6 +1510,22 @@ public:
 			case WID_O_COUPLE_CARGO:
 				OrderClick_CoupleCargo();
 				break;
+
+			case WID_O_COUPLE_SAME_DEST: {
+				VehicleOrderID sel_ord = this->OrderGetSel();
+				const Order *order = this->vehicle->GetOrder(sel_ord);
+				if (order == NULL || !order->IsType(OT_GOTO_COUPLE)) break;
+				DoCommandP(this->vehicle->tile, this->vehicle->index + (sel_ord << 20), MOF_COUPLE_SAME_DEST | ((order->GetCoupleSameDestination() ? 0 : 1) << 8), CMD_MODIFY_ORDER | CMD_MSG(STR_ERROR_CAN_T_MODIFY_THIS_ORDER));
+				break;
+			}
+
+			case WID_O_DECOUPLE_SORT: {
+				VehicleOrderID sel_ord = this->OrderGetSel();
+				const Order *order = this->vehicle->GetOrder(sel_ord);
+				if (order == NULL || !order->IsType(OT_DECOUPLE)) break;
+				DoCommandP(this->vehicle->tile, this->vehicle->index + (sel_ord << 20), MOF_DECOUPLE_SORT | ((order->GetDecoupleSort() ? 0 : 1) << 8), CMD_MODIFY_ORDER | CMD_MSG(STR_ERROR_CAN_T_MODIFY_THIS_ORDER));
+				break;
+			}
 
 			case WID_O_COUPLE_VALUE: {
 				const Order *order = this->vehicle->GetOrder(this->OrderGetSel());
@@ -1813,20 +1839,24 @@ static const NWidgetPart _nested_orders_train_widgets[] = {
 															SetDataTip(STR_BLACK_COMMA, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 			NWidget(NWID_HORIZONTAL, NC_EQUALSIZE),
-				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_COUPLE_LOAD), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_COUPLE_LOAD), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDER_TOGGLE_COUPLE_LOAD, STR_ORDER_CONDITIONAL_VARIABLE_TOOLTIP), SetResize(1, 0),
-				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_COUPLE_CARGO), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_COUPLE_CARGO), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDER_CARGO_TYPE_BUTTON, STR_ORDER_CONDITIONAL_COMPARATOR_TOOLTIP), SetResize(1, 0),
-				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_COUPLE_VALUE), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_COUPLE_VALUE), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDERS_COUPLE_VALUE_BUTTON, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_COUPLE_SAME_DEST), SetMinimalSize(93, 12), SetFill(1, 0),
+															SetDataTip(STR_ORDER_COUPLE_SAME_DEST_BUTTON, STR_ORDER_COUPLE_SAME_DEST_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 			NWidget(NWID_HORIZONTAL, NC_EQUALSIZE),
-				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_ORDERS_FIRST), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_ORDERS_FIRST), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDERS_DECOUPLE_FIRST_KEEP_ORDERS_BUTTON, STR_ORDER_CONDITIONAL_VARIABLE_TOOLTIP), SetResize(1, 0),
-				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_ORDERS_SECOND), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_ORDERS_SECOND), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDERS_DECOUPLE_SECOND_KEEP_ORDERS_BUTTON, STR_ORDER_CONDITIONAL_COMPARATOR_TOOLTIP), SetResize(1, 0),
-				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_DECOUPLE_VALUE), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_DECOUPLE_VALUE), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDERS_DECOUPLE_VALUE_BUTTON, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_DECOUPLE_SORT), SetMinimalSize(93, 12), SetFill(1, 0),
+															SetDataTip(STR_ORDER_DECOUPLE_SORT_BUTTON, STR_ORDER_DECOUPLE_SORT_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 		EndContainer(),
 		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_O_SHARED_ORDER_LIST), SetMinimalSize(12, 12), SetDataTip(SPR_SHARED_ORDERS_ICON, STR_ORDERS_VEH_WITH_SHARED_ORDERS_LIST_TOOLTIP),

@@ -179,6 +179,10 @@ public:
 	inline OrderCoupleFlags GetCoupleLoad() const { return (OrderCoupleFlags)GB(this->flags, 0, 3); }
 	/** How many wagons are we taking */
 	inline uint8 GetNumCouple() const { return GB(this->decouple_flags, 1, 7); }
+	/** Go to couple: only couple trains going to the same next station as we do. @pre IsType(OT_GOTO_COUPLE) */
+	inline bool GetCoupleSameDestination() const { return HasBit(this->decouple_flags, 0); }
+	/** Decouple: sort the train in a shunting yard instead of a simple cut. @pre IsType(OT_DECOUPLE) */
+	inline bool GetDecoupleSort() const { return HasBit(this->decouple_flags, 0); }
 	/** What orders should first part get */
 	inline OrderDecoupleOrdersFlags GetDecoupleFirstOrdersType() const { return (OrderDecoupleOrdersFlags)GB(this->flags, 0, 3); }
 	/** What orders should second part get */
@@ -212,6 +216,8 @@ public:
 	inline void SetCoupleLoad(OrderCoupleFlags load_type) { SB(this->flags, 0, 3, load_type); }
 	/** Set how many units to take */
 	inline void SetNumCouple(uint8 value) { SB(this->decouple_flags, 1, 7, value); }
+	inline void SetCoupleSameDestination(bool value) { SB(this->decouple_flags, 0, 1, value ? 1 : 0); }
+	inline void SetDecoupleSort(bool value) { SB(this->decouple_flags, 0, 1, value ? 1 : 0); }
 	/** Set what orders should first part get */
 	inline void SetDecoupleFirstOrdersType(OrderDecoupleOrdersFlags orders_type) { SB(this->flags, 0, 3, orders_type); }
 	/** Set what orders should second part get */

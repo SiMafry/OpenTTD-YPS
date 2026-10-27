@@ -46,9 +46,13 @@
 #include "table/strings.h"
 #include "table/train_cmd.h"
 
+#include <vector>
+
 #include "safeguards.h"
 
 Train *ReverseTrainDirection(Train *v, bool run_around = false);
+static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip);
+static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
 
 extern void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index);
 extern void ChangeVehicleNews(VehicleID from_index, VehicleID to_index);
@@ -2592,7 +2596,7 @@ static Train *FindCoupledOrders(Train *inner_end, const Train *other_end)
  * @param drawer Vehicle of the part holding the saved orders.
  * @return true if the orders were restored.
  */
-static bool RestoreCoupledOrders(Train *t, Train *drawer)
+static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true)
 {
 	int num = 0;
 	for (const Order *o = drawer->drawer_orders; o != NULL; o = o->next) num++;
@@ -2624,7 +2628,7 @@ static bool RestoreCoupledOrders(Train *t, Train *drawer)
 	t->cur_real_order_index = drawer->drawer_real_index < t->GetNumOrders() ? drawer->drawer_real_index : 0;
 	t->cur_implicit_order_index = drawer->drawer_impl_index < t->GetNumOrders() ? drawer->drawer_impl_index : 0;
 	const Order *current = t->GetOrder(t->cur_real_order_index);
-	if (current != NULL && current->IsType(OT_WAIT_COUPLE)) t->IncrementImplicitOrderIndex();
+	if (skip_wait && current != NULL && current->IsType(OT_WAIT_COUPLE)) t->IncrementImplicitOrderIndex();
 
 	GroupID g = drawer->drawer_group;
 	if (!IsDefaultGroupID(g) && Group::IsValidID(g) && Group::Get(g)->owner == t->owner && Group::Get(g)->vehicle_type == VEH_TRAIN) {
@@ -3680,6 +3684,459 @@ int Train::UpdateSpeed()
 	}
 }
 
+/* ===== Shunting yard ("Rozřadit") ===== */
+
+/** A piece of a train between two places where something was coupled. */
+struct TrainSegment {
+	Train *first;  ///< First vehicle of the segment (in chain order).
+	Train *last;   ///< Last vehicle of the segment (in chain order).
+	Train *drawer; ///< Vehicle holding the saved own orders of this wagon group, or NULL.
+};
+
+/**
+ * Is there a coupling point between two neighbouring vehicles of a train?
+ * @param a A vehicle.
+ * @param b The vehicle after it.
+ */
+static bool IsCouplingPoint(const Train *a, const Train *b)
+{
+	return (b->drawer_orders != NULL && b->drawer_neighbour == a->index) ||
+			(a->drawer_orders != NULL && a->drawer_neighbour == b->index);
+}
+
+/**
+ * Split a train (logically) into the wagon groups it was coupled from.
+ * @param v Front of the train.
+ * @param segments Gets the segments in chain order.
+ */
+static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
+{
+	segments.clear();
+	TrainSegment seg;
+	seg.first = v;
+	seg.drawer = NULL;
+	for (Train *u = v; u != NULL; u = u->Next()) {
+		Train *next = u->Next();
+		if (next == NULL || IsCouplingPoint(u, next)) {
+			seg.last = u;
+			segments.push_back(seg);
+			if (next != NULL) {
+				seg.first = next;
+				seg.drawer = NULL;
+			}
+		}
+	}
+	/* Find the saved orders of each group: at its start pointing back, or at its end pointing forward. */
+	for (size_t i = 0; i < segments.size(); i++) {
+		TrainSegment &s = segments[i];
+		if (i > 0 && s.first->drawer_orders != NULL && s.first->drawer_neighbour == segments[i - 1].last->index) {
+			s.drawer = s.first;
+		} else if (i + 1 < segments.size() && s.last->drawer_orders != NULL && s.last->drawer_neighbour == segments[i + 1].first->index) {
+			s.drawer = s.last;
+		}
+	}
+}
+
+/**
+ * Find a train depot right next to a station, to be used as the store of a shunting yard.
+ * @param st The station.
+ * @param v The train (owner and rail type).
+ * @return The depot tile, or INVALID_TILE.
+ */
+static TileIndex FindYardDepot(const Station *st, const Train *v)
+{
+	TILE_AREA_LOOP(tile, st->train_station) {
+		if (!IsRailStationTile(tile) || GetStationIndex(tile) != st->index) continue;
+		for (DiagDirection dir = DIAGDIR_BEGIN; dir < DIAGDIR_END; dir++) {
+			TileIndex t = TileAddByDiagDir(tile, dir);
+			if (!IsValidTile(t) || !IsRailDepotTile(t)) continue;
+			if (GetTileOwner(t) != v->owner) continue;
+			if (!HasBit(v->compatible_railtypes, GetRailType(t))) continue;
+			return t;
+		}
+	}
+	return INVALID_TILE;
+}
+
+/**
+ * Put a wagon group, already cut off from its train, into the yard depot
+ * as a stopped train with its own orders, waiting for coupling.
+ * @param seg The group.
+ * @param depot The depot tile.
+ */
+static void StoreGroupInDepot(TrainSegment &seg, TileIndex depot)
+{
+	Train *f = seg.first;
+	if (f->IsEngine()) {
+		f->SetFrontEngine();
+	} else {
+		f->SetFrontWagon();
+	}
+
+	DiagDirection dir = GetRailDepotDirection(depot);
+	int x = TileX(depot) * TILE_SIZE | _vehicle_initial_x_fract[dir];
+	int y = TileY(depot) * TILE_SIZE | _vehicle_initial_y_fract[dir];
+	for (Train *u = f; u != NULL; u = u->Next()) {
+		u->tile = depot;
+		u->x_pos = x;
+		u->y_pos = y;
+		u->z_pos = GetSlopePixelZ(x, y);
+		u->direction = DiagDirToDir(dir);
+		u->track = TRACK_BIT_DEPOT;
+		u->vehstatus |= VS_HIDDEN;
+		u->cur_speed = 0;
+		ClrBit(u->gv_flags, GVF_GOINGUP_BIT);
+		ClrBit(u->gv_flags, GVF_GOINGDOWN_BIT);
+		u->UpdatePosition();
+		u->UpdateViewport(true, false);
+	}
+	f->vehstatus |= VS_STOPPED;
+	f->current_order.Free();
+
+	SetTrainGroupID(f, DEFAULT_GROUP);
+	NormaliseTrainHead(f, CCF_ARRANGE);
+	GroupStatistics::CountVehicle(f, 1);
+
+	if (seg.drawer != NULL) RestoreCoupledOrders(f, seg.drawer, false);
+	const Order *cur = f->GetOrder(f->cur_real_order_index);
+	if (cur == NULL || !cur->IsType(OT_WAIT_COUPLE)) {
+		/* No own orders saved: it just waits here. */
+		DeleteVehicleOrders(f, false, true);
+		CreateWaitForCoupleOrder(f);
+		f->cur_real_order_index = f->cur_implicit_order_index = 0;
+	}
+	f->current_order.AssignOrder(*f->GetOrder(f->cur_real_order_index));
+	f->dest_tile = 0;
+
+	InvalidateWindowData(WC_VEHICLE_DEPOT, depot);
+	SetWindowDirty(WC_VEHICLE_VIEW, f->index);
+}
+
+/**
+ * The next station of a wagon group waiting in a yard depot.
+ * @param g Front of the group.
+ * @param yard The yard station (not counted).
+ */
+static StationID WaitingGroupDestination(const Train *g, StationID yard)
+{
+	const Order *cur = g->GetOrder(g->cur_real_order_index);
+	if (cur == NULL || !cur->IsType(OT_WAIT_COUPLE)) return INVALID_STATION;
+	return NextStationInOrders(g, g->cur_real_order_index + 1, yard);
+}
+
+/**
+ * Take a waiting wagon group out of the yard depot and couple it behind a train.
+ * The positions are set afterwards by #LayOutTrainInPlatform.
+ * @param v Front of the train.
+ * @param g Front of the group (stopped in the depot).
+ */
+static void TakeGroupFromDepot(Train *v, Train *g)
+{
+	TileIndex depot = g->tile;
+	Train *last = v->Last();
+
+	DeleteWindowById(WC_VEHICLE_VIEW, g->index);
+	DeleteWindowById(WC_VEHICLE_ORDERS, g->index);
+	DeleteWindowById(WC_VEHICLE_REFIT, g->index);
+	DeleteWindowById(WC_VEHICLE_DETAILS, g->index);
+	DeleteWindowById(WC_VEHICLE_TIMETABLE, g->index);
+	DeleteNewGRFInspectWindow(GSF_TRAINS, g->index);
+
+	/* Keep its own orders, just like with normal coupling. */
+	SaveCoupledOrders(g, last);
+
+	DeleteVehicleOrders(g);
+	RemoveVehicleFromGroup(g);
+	g->unitnumber = 0;
+	GroupStatistics::CountVehicle(g, -1);
+
+	v->profit_this_year += g->profit_this_year;
+	v->profit_last_year += g->profit_last_year;
+	g->profit_this_year = 0;
+	g->profit_last_year = 0;
+
+	g->vehstatus &= ~VS_STOPPED;
+	g->current_order.Free();
+	g->ClearFrontWagon();
+	g->ClearFrontEngine();
+
+	last->SetNext(g);
+	InvalidateWindowData(WC_VEHICLE_DEPOT, depot);
+}
+
+/**
+ * Information about the platform behind the front of a train.
+ */
+struct PlatformLine {
+	int axis_x;    ///< 1 if the platform runs along X, 0 if along Y.
+	int back;      ///< Direction pointing to the back of the train along the axis (+1 or -1).
+	int limit;     ///< Coordinate (x or y) of the back end of the platform.
+};
+
+/**
+ * Determine the platform behind the front of a train standing in a station.
+ * @param v Front of the train.
+ * @param st The station.
+ * @param line Gets the platform information.
+ * @return false if the train is not standing straight in the platform.
+ */
+static bool GetPlatformLine(const Train *v, StationID st, PlatformLine &line)
+{
+	if (!IsRailStationTile(v->tile) || GetStationIndex(v->tile) != st) return false;
+	if (v->track != TRACK_BIT_X && v->track != TRACK_BIT_Y) return false;
+
+	DiagDirection back_dir = ReverseDiagDir(DirToDiagDir(v->direction));
+	Axis axis = GetRailStationAxis(v->tile);
+	if (DiagDirToAxis(back_dir) != axis) return false;
+
+	TileIndex end = v->tile;
+	for (;;) {
+		TileIndex next = TileAddByDiagDir(end, back_dir);
+		if (!IsValidTile(next) || !IsRailStationTile(next) || GetStationIndex(next) != st || GetRailStationAxis(next) != axis) break;
+		end = next;
+	}
+
+	TileIndexDiffC diff = TileIndexDiffCByDiagDir(back_dir);
+	line.axis_x = (axis == AXIS_X) ? 1 : 0;
+	line.back = line.axis_x ? diff.x : diff.y;
+	int tile_coord = (line.axis_x ? TileX(end) : TileY(end)) * TILE_SIZE;
+	line.limit = (line.back > 0) ? tile_coord + TILE_SIZE - 1 : tile_coord;
+	return true;
+}
+
+/**
+ * Coordinate of the back end of a chain of vehicles laid out from the front along a platform.
+ * @param v Front vehicle (its position is kept).
+ * @param line The platform.
+ * @param extra Vehicles to add after the last one (may be NULL).
+ */
+static int TrainBackCoordinate(const Train *v, const PlatformLine &line, const Train *extra)
+{
+	int c = line.axis_x ? v->x_pos : v->y_pos;
+	const Train *u = v;
+	for (; u->Next() != NULL; u = u->Next()) c += line.back * u->CalcNextVehicleOffset();
+	if (extra != NULL) {
+		/* Rough but safe distance to the first added vehicle. */
+		c += line.back * ((u->gcache.cached_veh_length + 1) / 2 + (extra->gcache.cached_veh_length + 1) / 2 + 1);
+		u = extra;
+		for (; u->Next() != NULL; u = u->Next()) c += line.back * (u->CalcNextVehicleOffset() + 1);
+	}
+	c += line.back * ((u->gcache.cached_veh_length + 1) / 2);
+	return c;
+}
+
+/**
+ * Move the front of a train to the front end of the platform it faces,
+ * so as much of the platform as possible is behind it.
+ * @param v Front of the train (only this vehicle is moved; lay out the rest afterwards).
+ * @param st The station.
+ */
+static void MoveFrontToPlatformEnd(Train *v, StationID st)
+{
+	DiagDirection front_dir = DirToDiagDir(v->direction);
+	Axis axis = GetRailStationAxis(v->tile);
+	TileIndex end = v->tile;
+	for (;;) {
+		TileIndex next = TileAddByDiagDir(end, front_dir);
+		if (!IsValidTile(next) || !IsRailStationTile(next) || GetStationIndex(next) != st || GetRailStationAxis(next) != axis) break;
+		end = next;
+	}
+	TileIndexDiffC diff = TileIndexDiffCByDiagDir(front_dir);
+	bool along_x = (axis == AXIS_X);
+	int f = along_x ? diff.x : diff.y;
+	int tile_coord = (along_x ? TileX(end) : TileY(end)) * TILE_SIZE;
+	int front_limit = (f > 0) ? tile_coord + TILE_SIZE - 1 : tile_coord;
+	int c = front_limit - f * ((v->gcache.cached_veh_length + 1) / 2);
+	if (along_x) {
+		v->x_pos = c;
+	} else {
+		v->y_pos = c;
+	}
+	v->tile = TileVirtXY(v->x_pos, v->y_pos);
+	v->UpdatePosition();
+	v->UpdateViewport(true, true);
+}
+
+/** Does a coordinate lie inside the platform (not beyond its back end)? */
+static inline bool InsidePlatform(int c, const PlatformLine &line)
+{
+	return line.back > 0 ? c <= line.limit : c >= line.limit;
+}
+
+/**
+ * Put all vehicles of a train behind its front in a straight line along the platform.
+ * @param v Front of the train.
+ * @param line The platform.
+ */
+static void LayOutTrainInPlatform(Train *v, const PlatformLine &line)
+{
+	int c = line.axis_x ? v->x_pos : v->y_pos;
+	for (Train *u = v; u->Next() != NULL; u = u->Next()) {
+		Train *w = u->Next();
+		c += line.back * u->CalcNextVehicleOffset();
+		w->x_pos = line.axis_x ? c : v->x_pos;
+		w->y_pos = line.axis_x ? v->y_pos : c;
+		w->z_pos = v->z_pos;
+		w->tile = TileVirtXY(w->x_pos, w->y_pos);
+		w->direction = v->direction;
+		w->track = v->track;
+		w->vehstatus &= ~VS_HIDDEN;
+		ClrBit(w->gv_flags, GVF_GOINGUP_BIT);
+		ClrBit(w->gv_flags, GVF_GOINGDOWN_BIT);
+		w->UpdatePosition();
+		w->UpdateViewport(true, true);
+	}
+}
+
+/**
+ * Sort a train in a shunting yard: wagon groups that do not go to the next
+ * station of the locomotive are stored in the depot next to the station, and
+ * groups waiting there for that station are added, as far as the platform allows.
+ * @param v Front of the train, stopped in the yard station.
+ * @param station The yard station.
+ * @return Front of the train afterwards.
+ */
+static Train *SortTrainInYard(Train *v, StationID station)
+{
+	const Station *st = Station::Get(station);
+	TileIndex depot = FindYardDepot(st, v);
+	if (depot == INVALID_TILE) {
+		if (v->owner == _local_company) {
+			SetDParam(0, v->index);
+			AddVehicleAdviceNewsItem(STR_NEWS_SORT_NO_DEPOT, v->index);
+		}
+		return v;
+	}
+
+	PlatformLine line;
+	if (!IsRailStationTile(v->Last()->tile) || GetStationIndex(v->Last()->tile) != station || !GetPlatformLine(v, station, line)) {
+		if (v->owner == _local_company) {
+			SetDParam(0, v->index);
+			AddVehicleAdviceNewsItem(STR_NEWS_SORT_NOT_IN_PLATFORM, v->index);
+		}
+		return v;
+	}
+
+	/* Where does the locomotive go next? */
+	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+
+	std::vector<TrainSegment> segments;
+	GetTrainSegments(v, segments);
+
+	/* The part with the locomotive must be the front; it stays. */
+	size_t main = 0;
+	for (size_t i = 0; i < segments.size(); i++) {
+		bool engine = false;
+		for (Train *u = segments[i].first; ; u = u->Next()) {
+			if (u->IsEngine()) engine = true;
+			if (u == segments[i].last) break;
+		}
+		if (engine) {
+			main = i;
+			break;
+		}
+	}
+	if (main != 0) {
+		/* Pushed train: groups in front of the locomotive. Not supported. */
+		if (v->owner == _local_company) {
+			SetDParam(0, v->index);
+			AddVehicleAdviceNewsItem(STR_NEWS_SORT_NOT_IN_PLATFORM, v->index);
+		}
+		return v;
+	}
+
+	/* Decide which groups stay and cut the train apart. */
+	std::vector<bool> keep(segments.size(), true);
+	for (size_t i = 1; i < segments.size(); i++) {
+		if (segments[i].drawer == NULL) continue; // nothing known about it: stays with the train
+		StationID dest = NextStationInSavedOrders(segments[i].drawer->drawer_orders, segments[i].drawer->drawer_real_index, station);
+		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest);
+	}
+	for (size_t i = 0; i < segments.size(); i++) segments[i].last->SetNext(NULL);
+
+	/* Re-link the train: locomotive part + groups that stay. */
+	Train *tail = segments[0].last;
+	for (size_t i = 1; i < segments.size(); i++) {
+		if (!keep[i]) continue;
+		tail->SetNext(segments[i].first);
+		tail = segments[i].last;
+	}
+
+	/* Store the others in the depot. */
+	for (size_t i = 1; i < segments.size(); i++) {
+		if (!keep[i]) StoreGroupInDepot(segments[i], depot);
+	}
+
+	NormaliseTrainHead(v, CCF_ARRANGE_STATION);
+
+	/* The rest is done in the next tick, when the train is not moving any more
+	 * (this is called while the front is entering the station). */
+	SetBit(v->flags, VRF_YARD_SORT_PENDING);
+	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
+	return v;
+}
+
+/**
+ * Second part of sorting in a shunting yard, done when the train stands in
+ * the platform: turn towards the next station, use the whole platform and
+ * add the waiting groups for the locomotive's destination.
+ * @param v Front of the train.
+ * @return Front of the train afterwards.
+ */
+static Train *FinishSortTrainInYard(Train *v)
+{
+	ClrBit(v->flags, VRF_YARD_SORT_PENDING);
+	StationID station = v->last_station_visited;
+	if (!Station::IsValidID(station)) return v;
+	const Station *st = Station::Get(station);
+	TileIndex depot = FindYardDepot(st, v);
+	PlatformLine line;
+	if (depot == INVALID_TILE || !GetPlatformLine(v, station, line)) return v;
+
+	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+
+	/* Face the way the train will leave: the locomotive goes to that end
+	 * ("runs around"), so the added groups are behind it. */
+	if (loco_dest != INVALID_STATION) {
+		Order saved_order = v->current_order;
+		TileIndex saved_dest = v->dest_tile;
+		v->current_order.MakeGoToStation(loco_dest);
+		v->dest_tile = Station::Get(loco_dest)->xy;
+		bool turn = CheckReverseTrain(v);
+		v->current_order = saved_order;
+		v->dest_tile = saved_dest;
+		if (turn) v = ReverseTrainDirection(v, true);
+	}
+
+	/* Use the whole platform: front to its far end, the rest behind. */
+	MoveFrontToPlatformEnd(v, station);
+	if (!GetPlatformLine(v, station, line)) return v;
+	LayOutTrainInPlatform(v, line);
+
+	/* Add waiting groups for our destination, oldest first, as long as the platform allows. */
+	if (loco_dest != INVALID_STATION) {
+		std::vector<Train *> waiting;
+		Train *t;
+		FOR_ALL_TRAINS(t) {
+			if (!t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
+			if (WaitingGroupDestination(t, station) != loco_dest) continue;
+			waiting.push_back(t);
+		}
+		for (size_t i = 0; i < waiting.size(); i++) {
+			if (!InsidePlatform(TrainBackCoordinate(v, line, waiting[i]), line)) continue; // does not fit: waits for the next train
+			TakeGroupFromDepot(v, waiting[i]);
+			NormaliseTrainHead(v, CCF_ARRANGE_STATION);
+		}
+	}
+
+	LayOutTrainInPlatform(v, line);
+	v->ConsistChanged(CCF_ARRANGE_STATION);
+	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
+	SetWindowDirty(WC_VEHICLE_DETAILS, v->index);
+	SetWindowDirty(WC_VEHICLE_VIEW, v->index);
+	return v;
+}
+
 /**
  * Trains enters a station, send out a news item if it is the first train, and start loading.
  * @param v Train that entered the station.
@@ -3691,7 +4148,13 @@ static void TrainEnterStation(Train *v, StationID station)
 	
 	Train *u = NULL;
 	DecoupleLoad load_trains = DECOUPLE_NO_LOAD;
-	if (v->current_order.GetDestination() == station && v->current_order.GetDecouple() == ODF_DECOUPLE) {
+	const Order *sort_order = v->current_order.GetDestination() == station && v->current_order.GetDecouple() == ODF_DECOUPLE ?
+			v->GetOrder(v->cur_implicit_order_index + 1) : NULL;
+	if (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) {
+		/* Shunting yard: sort the wagon groups, then stop here as usual. */
+		v = SortTrainInYard(v, station);
+		load_trains = DECOUPLE_LOAD_FIRST;
+	} else if (v->current_order.GetDestination() == station && v->current_order.GetDecouple() == ODF_DECOUPLE) {
 		u = DecoupleTrain(v);
 		if (u == v) {
 			/* Decoupling failed (e.g. the train is too short or does not fit
@@ -4719,6 +5182,95 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	if (CheckReverseTrain(v)) SetBit(v->flags, VRF_REVERSING);
 }
 
+/**
+ * The next station a list of orders leads to.
+ * @param v Vehicle whose orders to look at.
+ * @param start Index of the first order to look at.
+ * @param skip A station to skip (where we are now), or INVALID_STATION.
+ * @return The next station, or INVALID_STATION if there is none.
+ */
+static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip)
+{
+	int num = v->GetNumOrders();
+	for (int i = 0; i < num; i++) {
+		const Order *o = v->GetOrder((start + i) % num);
+		if (o == NULL) break;
+		if (!o->IsType(OT_GOTO_STATION)) continue;
+		if (o->GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) continue;
+		if (o->GetDestination() == skip) continue;
+		return o->GetDestination();
+	}
+	return INVALID_STATION;
+}
+
+/**
+ * Same as #NextStationInOrders, for saved own orders of a wagon group.
+ * @param first First saved order.
+ * @param start Index of the first order to look at.
+ * @param skip A station to skip, or INVALID_STATION.
+ * @return The next station, or INVALID_STATION if there is none.
+ */
+static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip)
+{
+	int num = 0;
+	for (const Order *o = first; o != NULL; o = o->next) num++;
+	for (int i = 0; i < num; i++) {
+		int index = (start + i) % num;
+		const Order *o = first;
+		for (int j = 0; j < index; j++) o = o->next;
+		if (!o->IsType(OT_GOTO_STATION)) continue;
+		if (o->GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) continue;
+		if (o->GetDestination() == skip) continue;
+		return o->GetDestination();
+	}
+	return INVALID_STATION;
+}
+
+/**
+ * Check the 'same destination' condition of a 'go to couple' order:
+ * the waiting train must go to the same next station as the coupling train.
+ * The station where the waiting train stands is not counted.
+ * @param v The train that wants to couple.
+ * @param u The waiting train.
+ * @return true if the trains may couple.
+ */
+bool CoupleDestinationMatches(const Train *v, const Train *u)
+{
+	if (v == NULL || !v->current_order.IsType(OT_GOTO_COUPLE) || !v->current_order.GetCoupleSameDestination()) return true;
+
+	StationID here = IsRailStationTile(u->tile) ? GetStationIndex(u->tile) : INVALID_STATION;
+	StationID ours = NextStationInOrders(v, v->cur_real_order_index + 1, here);
+	StationID theirs = NextStationInOrders(u, u->cur_real_order_index + 1, here);
+	return ours != INVALID_STATION && ours == theirs;
+}
+
+/**
+ * May train \a v, which is going to couple, couple train \a u?
+ * Checks all conditions of the 'go to couple' order.
+ * @param v The train that wants to couple.
+ * @param u A train.
+ * @return true if \a u is waiting and fits the order of \a v.
+ */
+static bool IsCoupleTarget(const Train *v, const Train *u)
+{
+	if (!v->current_order.IsType(OT_GOTO_COUPLE) || !u->current_order.IsType(OT_WAIT_COUPLE)) return false;
+	const Order &o = v->current_order;
+	switch (o.GetCoupleLoad()) {
+		case ODC_IS_EMPTY: if (u->cargo.StoredCount() != 0) return false; break;
+		case ODC_IS_FULL:  if (u->cargo.StoredCount() != u->cargo_cap) return false; break;
+		default: break;
+	}
+	if (o.HasCoupleCargoType()) {
+		bool found = false;
+		for (const Train *w = u; w != NULL; w = w->Next()) {
+			if (w->cargo_type == o.GetCoupleCargoType()) found = true;
+		}
+		if (!found) return false;
+	}
+	if (o.GetNumCouple() != 0 && o.GetNumCouple() != CountVehiclesInVehicles(u)) return false;
+	return CoupleDestinationMatches(v, u);
+}
+
 /** Data for #WaitingTrainAheadEnum. */
 struct WaitingTrainAheadData {
 	const Train *self; ///< The coupling train.
@@ -4784,6 +5336,7 @@ static Train *GetCouplePosition(Train *v, bool &reverse)
 	if (!other_vehicle->First()->current_order.IsType(OT_WAIT_COUPLE)) return NULL;
 	Train *u = Train::From(other_vehicle)->First();
 	if (!TrainFitStation(u)) return NULL;
+	if (!IsCoupleTarget(v, u)) return NULL;
 
 	DirDiff dir_diff = DirDifference(v->direction, u->direction);
 	reverse = dir_diff == DIRDIFF_SAME || dir_diff == DIRDIFF_45RIGHT || dir_diff == DIRDIFF_45LEFT;
@@ -4921,6 +5474,8 @@ static Vehicle *TrainBlockingEnum(Vehicle *v, void *data)
 	if (Train::From(v)->track == TRACK_BIT_DEPOT) return NULL;
 	if (Train::From(v)->First() == d->self) return NULL;
 	if (abs(v->z_pos - d->self->z_pos) > 5) return NULL; // bridge above / below
+	/* A train going to couple may come close to the train it couples. */
+	if (IsCoupleTarget(d->self, Train::From(v)->First())) return NULL;
 
 	int rx = v->x_pos - d->self->x_pos;
 	int ry = v->y_pos - d->self->y_pos;
@@ -4972,6 +5527,7 @@ static Vehicle *OtherTrainOnTrackEnum(Vehicle *v, void *data)
 	const Train *t = Train::From(v);
 	if (t->First() == d->self) return NULL;
 	if ((t->track & d->track) == 0 && t->track != TRACK_BIT_WORMHOLE) return NULL;
+	if (IsCoupleTarget(d->self, t->First())) return NULL;
 	return v;
 }
 
@@ -5043,6 +5599,9 @@ static bool TrainLocoHandler(Train *v, bool mode)
 
 	/* train is broken down? */
 	if (v->HandleBreakdown()) return true;
+
+	/* Shunting yard: finish sorting now that the train stands in the platform. */
+	if (HasBit(v->flags, VRF_YARD_SORT_PENDING) && !mode) FinishSortTrainInYard(v);
 
 	if (HasBit(v->flags, VRF_REVERSING) && v->cur_speed == 0) {
 		if (!mode) return true;
@@ -5147,8 +5706,7 @@ static bool TrainLocoHandler(Train *v, bool mode)
 	 * with the parts of a just decoupled train, which no signal separates.
 	 * Before starting, also wait until the way to the next signal is free.
 	 * A train going to couple must get close. */
-	if (!v->current_order.IsType(OT_GOTO_COUPLE) &&
-			(IsTrainBlockedAhead(v) || (v->cur_speed == 0 && IsOtherTrainBeforeNextSignal(v)))) {
+	if (IsTrainBlockedAhead(v) || (v->cur_speed == 0 && IsOtherTrainBeforeNextSignal(v))) {
 		v->cur_speed = 0;
 		v->subspeed = 0;
 		v->SetLastSpeed();

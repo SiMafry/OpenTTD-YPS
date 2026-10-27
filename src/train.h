@@ -33,6 +33,7 @@ enum VehicleRailFlags {
 	VRF_TOGGLE_REVERSE                = 7, ///< Used for vehicle var 0xFE bit 8 (toggled each time the train is reversed, accurate for first vehicle only).
 	VRF_TRAIN_STUCK                   = 8, ///< Train can't get a path reservation.
 	VRF_LEAVING_STATION               = 9, ///< Train is just leaving a station.
+	VRF_YARD_SORT_PENDING             = 10, ///< Shunting yard: add waiting groups in the next tick.
 };
 
 /** Modes for ignoring signals. */
@@ -73,6 +74,7 @@ int GetTrainStopLocation(StationID station_id, TileIndex tile, const Train *v, i
 void GetTrainSpriteSize(EngineID engine, uint &width, uint &height, int &xoffs, int &yoffs, EngineImageType image_type);
 
 bool TrainFitStation(const Train *v);
+bool CoupleDestinationMatches(const Train *v, const Train *u);
 
 /** Variables that are cached to improve performance and such */
 struct TrainCache {

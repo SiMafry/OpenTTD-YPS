@@ -3867,6 +3867,14 @@ STR_ORDERS_GO_TO_COUPLE                                         :Go to couple
 STR_ORDER_WAIT_FOR_COUPLE                                       :Wait for couple
 STR_ORDER_REVERSE_PUSH                                          :Turn around (push)
 STR_ORDER_REVERSE_RUN_AROUND                                    :Turn around (locomotive runs around)
+STR_ORDER_COUPLE_SAME_DEST_BUTTON                               :{BLACK}Same destination
+STR_ORDER_COUPLE_SAME_DEST_TOOLTIP                              :{BLACK}Only couple a waiting train whose next station is the same as ours
+STR_ORDER_COUPLE_SAME_DEST                                      : (same destination)
+STR_ORDER_DECOUPLE_SORT_BUTTON                                  :{BLACK}Sort
+STR_ORDER_DECOUPLE_SORT_TOOLTIP                                 :{BLACK}Shunting yard: wagon groups that do not go where the locomotive goes are left in the depot next to the station, waiting groups for the locomotive's destination are added
+STR_ORDER_DECOUPLE_SORT_DETAILS                                 :[Sort wagon groups in shunting yard]
+STR_NEWS_SORT_NO_DEPOT                                          :{WHITE}{VEHICLE} can't sort: no train depot next to the station
+STR_NEWS_SORT_NOT_IN_PLATFORM                                   :{WHITE}{VEHICLE} can't sort: the train does not fit the platform
 STR_ORDERS_GO_TO_TOOLTIP                                        :{BLACK}Insert a new order before the highlighted order, or add to end of list. Ctrl makes station orders 'full load any cargo', waypoint orders 'non-stop' and depot orders 'service'. 'Share orders' or Ctrl lets this vehicle share orders with the selected vehicle. Clicking a vehicle copies the orders from that vehicle. A depot order disables automatic servicing of the vehicle
 
 STR_ORDER_GO_TO_COUPLE                                          :Go to couple {STRING} train

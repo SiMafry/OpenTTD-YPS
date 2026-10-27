@@ -217,6 +217,7 @@ public:
 
 protected:
 	Order dest_order;
+	const Train *couple_veh; ///< The train that wants to couple.
 	
 public:	
 	/** to access inherited path finder */
@@ -228,6 +229,7 @@ public:
 	void SetDestination(const Train *v)
 	{
 		dest_order.AssignOrder(v->current_order);
+		couple_veh = v;
 		CYapfDestinationRailBase::SetDestination(v);
 	}
 
@@ -272,7 +274,7 @@ public:
 		Train *t = GetTrainForReservation(tile, TrackdirToTrack(td));
 		if (t == NULL) return false;
 		if (t->current_order.IsType(OT_WAIT_COUPLE)) {
-			if (TrainFitStation(t) && CheckOrderLoad(t) && CheckOrderCargoType(t) && CheckNumberOfWagons(t)) return true;
+			if (TrainFitStation(t) && CheckOrderLoad(t) && CheckOrderCargoType(t) && CheckNumberOfWagons(t) && CoupleDestinationMatches(couple_veh, t)) return true;
 		}
 		return false;
 	}
