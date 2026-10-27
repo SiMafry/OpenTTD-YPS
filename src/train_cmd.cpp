@@ -4958,6 +4958,77 @@ static bool IsTrainBlockedAhead(const Train *v)
 	return d.blocked;
 }
 
+/** Data for #OtherTrainOnTrackEnum. */
+struct OtherTrainOnTrackData {
+	const Train *self; ///< The train that wants to start.
+	TrackBits track;   ///< The track to look at.
+};
+
+/** Find a vehicle of another (not crashed) train on a given track. */
+static Vehicle *OtherTrainOnTrackEnum(Vehicle *v, void *data)
+{
+	const OtherTrainOnTrackData *d = (const OtherTrainOnTrackData *)data;
+	if (v->type != VEH_TRAIN || (v->vehstatus & VS_CRASHED)) return NULL;
+	const Train *t = Train::From(v);
+	if (t->First() == d->self) return NULL;
+	if ((t->track & d->track) == 0 && t->track != TRACK_BIT_WORMHOLE) return NULL;
+	return v;
+}
+
+/**
+ * Is there another train on the track between this train and the next signal
+ * in front of it? Used before starting, so the second part of a decoupled
+ * train waits until the first part has passed the next signal.
+ * At a junction the reserved way is followed; when that is not clear, the
+ * search stops there (the short range check still prevents running into a train).
+ * @param v The train.
+ * @return true if another train is in the way.
+ */
+static bool IsOtherTrainBeforeNextSignal(const Train *v)
+{
+	if (v->track == TRACK_BIT_DEPOT || v->track == TRACK_BIT_WORMHOLE) return false;
+
+	TileIndex tile = v->tile;
+	Trackdir td = v->GetVehicleTrackdir();
+	if (!IsValidTrackdir(td)) return false;
+	if (IsTileType(tile, MP_RAILWAY) && HasSignalOnTrackdir(tile, td)) return false;
+
+	OtherTrainOnTrackData d;
+	d.self = v;
+
+	CFollowTrackRail ft(v, GetRailTypeInfo(v->railtype)->compatible_railtypes);
+	for (int i = 0; i < 64; i++) {
+		if (!ft.Follow(tile, td)) return false;
+
+		/* The follower jumps over station platforms; look at the skipped tiles too. */
+		if (ft.m_is_station && ft.m_tiles_skipped > 0) {
+			d.track = TrackToTrackBits(TrackdirToTrack(td));
+			TileIndexDiff diff = TileOffsByDiagDir(ft.m_exitdir);
+			for (TileIndex t = tile + diff; t != ft.m_new_tile; t += diff) {
+				if (HasVehicleOnPos(t, &d, &OtherTrainOnTrackEnum)) return true;
+			}
+		}
+		tile = ft.m_new_tile;
+
+		TrackdirBits bits = ft.m_new_td_bits;
+		if (KillFirstBit(bits) != TRACKDIR_BIT_NONE) {
+			/* A junction: only go on along the reserved way. */
+			bits &= TrackBitsToTrackdirBits(GetReservedTrackbits(tile));
+			if (bits == TRACKDIR_BIT_NONE || KillFirstBit(bits) != TRACKDIR_BIT_NONE) return false;
+		}
+		td = FindFirstTrackdir(bits);
+		if (!IsValidTrackdir(td)) return false;
+
+		d.track = TrackToTrackBits(TrackdirToTrack(td));
+		if (HasVehicleOnPos(tile, &d, &OtherTrainOnTrackEnum)) return true;
+		if (IsTileType(ft.m_new_tile, MP_TUNNELBRIDGE) && HasVehicleOnPos(GetOtherTunnelBridgeEnd(tile), &d, &OtherTrainOnTrackEnum)) return true;
+
+		/* Reached the next signal for our direction: beyond it the signal decides. */
+		if (IsTileType(tile, MP_RAILWAY) && HasSignalOnTrackdir(tile, td)) return false;
+	}
+	return false;
+}
+
 static bool TrainLocoHandler(Train *v, bool mode)
 {
 	/* train has crashed? */
@@ -5074,8 +5145,10 @@ static bool TrainLocoHandler(Train *v, bool mode)
 
 	/* Never drive into a train standing right in front of us; this happens
 	 * with the parts of a just decoupled train, which no signal separates.
-	 * Wait until it has moved away. A train going to couple must get close. */
-	if (!v->current_order.IsType(OT_GOTO_COUPLE) && IsTrainBlockedAhead(v)) {
+	 * Before starting, also wait until the way to the next signal is free.
+	 * A train going to couple must get close. */
+	if (!v->current_order.IsType(OT_GOTO_COUPLE) &&
+			(IsTrainBlockedAhead(v) || (v->cur_speed == 0 && IsOtherTrainBeforeNextSignal(v)))) {
 		v->cur_speed = 0;
 		v->subspeed = 0;
 		v->SetLastSpeed();
