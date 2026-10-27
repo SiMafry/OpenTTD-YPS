@@ -2685,6 +2685,24 @@ enum DecoupleLoad {
 };
 DECLARE_ENUM_AS_BIT_SET(DecoupleLoad)
 
+/**
+ * A part got its own orders back. When its next order is the station it is
+ * standing in (the journey it was coupled for ends here), stop there right
+ * away instead of driving off and coming back.
+ * @param t Front of the part.
+ * @return true if the part should start loading here.
+ */
+static bool OwnOrdersStopHere(Train *t)
+{
+	if (!t->current_order.IsType(OT_GOTO_STATION)) return false;
+	if (t->current_order.GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) return false;
+	StationID station = t->current_order.GetDestination();
+	if (!IsRailStationTile(t->tile) || GetStationIndex(t->tile) != station) return false;
+	/* Setting the order cleared this; loading needs it. */
+	t->last_station_visited = station;
+	return true;
+}
+
 void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 {
 	Order *after_decouple_flags = v->orders.list->GetOrderAt(v->cur_implicit_order_index + 1);
@@ -2705,11 +2723,13 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 
 	if (v != u) {
 		if (second_type == ODOF_OWN_ORDERS) {
-			if (second_drawer == NULL || !RestoreCoupledOrders(u, second_drawer)) {
+			bool restored = second_drawer != NULL && RestoreCoupledOrders(u, second_drawer);
+			if (!restored) {
 				/* Nothing saved for this cut: just wait. */
 				CreateWaitForCoupleOrder(u);
 			}
 			ProcessOrders(u);
+			if (restored && OwnOrdersStopHere(u)) load_trains |= DECOUPLE_LOAD_SECOND;
 		}
 		switch (second_type == ODOF_OWN_ORDERS ? ODOF_END : second_type) {
 			case ODOF_END: break; // handled above
@@ -2760,11 +2780,13 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 			if (first_drawer == NULL || !RestoreCoupledOrders(v, first_drawer)) {
 				DeleteVehicleOrders(v, false, true);
 				CreateWaitForCoupleOrder(v);
+				first_drawer = NULL;
 			}
 			break;
 		default: NOT_REACHED();
 	}
 	ProcessOrders(v);
+	if (first_type == ODOF_OWN_ORDERS && first_drawer != NULL && OwnOrdersStopHere(v)) load_trains |= DECOUPLE_LOAD_FIRST;
 }
 
 static Train *DecoupleTrain(Train *v)
@@ -3584,54 +3606,6 @@ bool TryPathReserve(Train *v, bool mark_as_stuck, bool first_tile_okay)
 }
 
 
-/** Data for #OtherTrainBehindEnum. */
-struct OtherTrainBehindData {
-	const Train *self; ///< The train itself.
-	const Train *last; ///< Its last vehicle.
-	int dx, dy;        ///< Unit vector of the direction the train is heading.
-};
-
-/** Find a vehicle of another (not crashed) train close behind the last vehicle. */
-static Vehicle *OtherTrainBehindEnum(Vehicle *v, void *data)
-{
-	const OtherTrainBehindData *d = (const OtherTrainBehindData *)data;
-	if (v->type != VEH_TRAIN || (v->vehstatus & VS_CRASHED)) return NULL;
-	if (Train::From(v)->First() == d->self) return NULL;
-
-	int rx = v->x_pos - d->last->x_pos;
-	int ry = v->y_pos - d->last->y_pos;
-	/* Behind means against the direction of travel, and close by. */
-	if (rx * d->dx + ry * d->dy >= 0) return NULL;
-	if (abs(rx) > 2 * TILE_SIZE || abs(ry) > 2 * TILE_SIZE) return NULL;
-	return v;
-}
-
-/**
- * Is another train standing right behind this one on the same platform?
- * This happens after decoupling: both parts stand in one station, so no
- * signal separates them, and turning around would drive into the other part.
- * @param v The train.
- * @return true if turning around would hit another train.
- */
-static bool IsOtherTrainBehindOnPlatform(const Train *v)
-{
-	const Train *last = v->Last();
-	if (!IsRailStationTile(last->tile)) return false;
-
-	OtherTrainBehindData d;
-	d.self = v;
-	d.last = last;
-	TileIndexDiffC diff = TileIndexDiffCByDiagDir(DirToDiagDir(last->direction));
-	d.dx = diff.x;
-	d.dy = diff.y;
-
-	if (HasVehicleOnPos(last->tile, &d, &OtherTrainBehindEnum)) return true;
-
-	TileIndex behind = TileAddByDiagDir(last->tile, ReverseDiagDir(DirToDiagDir(last->direction)));
-	if (!IsValidTile(behind) || !IsRailStationTile(behind) || GetStationIndex(behind) != GetStationIndex(last->tile)) return false;
-	return HasVehicleOnPos(behind, &d, &OtherTrainBehindEnum);
-}
-
 static bool CheckReverseTrain(const Train *v)
 {
 	if (_settings_game.difficulty.line_reverse_mode != 0 ||
@@ -3639,8 +3613,6 @@ static bool CheckReverseTrain(const Train *v)
 		return false;
 	}
 
-	/* Never turn around into the other part of a just decoupled train. */
-	if (IsOtherTrainBehindOnPlatform(v)) return false;
 
 	assert(v->track != TRACK_BIT_NONE);
 
@@ -3736,10 +3708,10 @@ static void TrainEnterStation(Train *v, StationID station)
 			u->last_station_visited = station;
 		}
 		/* The second part stands right behind the first one, facing it.
-		 * Always turn it around so it can never drive into the first part,
-		 * whether it loads here or not. (Before it was only turned when it
-		 * did not load, so e.g. a pushing locomotive that kept its orders
-		 * drove into the wagons it had just left.) */
+		 * Turn it around so it faces away from the first part. If its way
+		 * leads past the first part after all, it turns again when leaving
+		 * the station and then waits behind the first part until that one is
+		 * out of the way (see IsTrainBlockedAhead()). */
 		if (u != v) u = ReverseTrainDirection(u);
 	} else {
 		load_trains = DECOUPLE_LOAD_FIRST;
@@ -4934,6 +4906,58 @@ static bool TryStopAtCurrentStation(Train *v)
 	return true;
 }
 
+/** Data for #TrainBlockingEnum. */
+struct TrainBlockingData {
+	const Train *self; ///< The train that wants to move.
+	int dx, dy;        ///< Direction it is heading.
+	bool blocked;      ///< Found a train right in front.
+};
+
+/** Find a vehicle of another train right in front of the front of a train. */
+static Vehicle *TrainBlockingEnum(Vehicle *v, void *data)
+{
+	TrainBlockingData *d = (TrainBlockingData *)data;
+	if (v->type != VEH_TRAIN || (v->vehstatus & VS_CRASHED)) return NULL;
+	if (Train::From(v)->track == TRACK_BIT_DEPOT) return NULL;
+	if (Train::From(v)->First() == d->self) return NULL;
+	if (abs(v->z_pos - d->self->z_pos) > 5) return NULL; // bridge above / below
+
+	int rx = v->x_pos - d->self->x_pos;
+	int ry = v->y_pos - d->self->y_pos;
+	int along = rx * d->dx + ry * d->dy;
+	int across = abs(rx * d->dy - ry * d->dx);
+	if (along <= 0 || across > 3) return NULL;
+
+	/* Close enough that moving on would touch it (with a small margin). */
+	int touch = (Train::From(v)->gcache.cached_veh_length + 1) / 2 + (d->self->gcache.cached_veh_length + 1) / 2;
+	if (along > touch + 2) return NULL;
+
+	d->blocked = true;
+	return v;
+}
+
+/**
+ * Is another train standing (or moving) right in front of this train?
+ * @param v The train.
+ * @return true if moving on would run into it.
+ */
+static bool IsTrainBlockedAhead(const Train *v)
+{
+	if (v->track == TRACK_BIT_DEPOT || v->track == TRACK_BIT_WORMHOLE) return false;
+
+	static const int8 dir_dx[DIR_END] = { -1, -1, -1,  0,  1,  1,  1,  0 };
+	static const int8 dir_dy[DIR_END] = { -1,  0,  1,  1,  1,  0, -1, -1 };
+
+	TrainBlockingData d;
+	d.self = v;
+	d.dx = dir_dx[v->direction];
+	d.dy = dir_dy[v->direction];
+	d.blocked = false;
+
+	FindVehicleOnPosXY(v->x_pos, v->y_pos, &d, &TrainBlockingEnum);
+	return d.blocked;
+}
+
 static bool TrainLocoHandler(Train *v, bool mode)
 {
 	/* train has crashed? */
@@ -5045,6 +5069,16 @@ static bool TrainLocoHandler(Train *v, bool mode)
 	if (v->current_order.IsType(OT_LEAVESTATION)) {
 		v->current_order.Free();
 		SetWindowWidgetDirty(WC_VEHICLE_VIEW, v->index, WID_VV_START_STOP);
+		return true;
+	}
+
+	/* Never drive into a train standing right in front of us; this happens
+	 * with the parts of a just decoupled train, which no signal separates.
+	 * Wait until it has moved away. A train going to couple must get close. */
+	if (!v->current_order.IsType(OT_GOTO_COUPLE) && IsTrainBlockedAhead(v)) {
+		v->cur_speed = 0;
+		v->subspeed = 0;
+		v->SetLastSpeed();
 		return true;
 	}
 
