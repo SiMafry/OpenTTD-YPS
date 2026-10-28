@@ -2163,6 +2163,11 @@ void Vehicle::LeaveStation()
 {
 	assert(this->current_order.IsType(OT_LOADING));
 
+	if (this->type == VEH_TRAIN) {
+		extern void AdvanceCoupledGroupsAtStation(Train *v, StationID station);
+		AdvanceCoupledGroupsAtStation(Train::From(this), this->last_station_visited);
+	}
+
 	delete this->cargo_payment;
 	assert(this->cargo_payment == NULL); // cleared by ~CargoPayment
 

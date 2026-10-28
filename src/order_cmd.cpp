@@ -1661,6 +1661,8 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 				break;
 
 			case MOF_DECOUPLE_SORT:
+				/* The unit count means "maximum length" when sorting; don't inherit a decouple count. */
+				if (data != 0 && !order->GetDecoupleSort()) order->SetNumDecouple(0);
 				order->SetDecoupleSort(data != 0);
 				order->SetDecoupleSortWait(data == 2);
 				break;

@@ -406,6 +406,10 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 		case OT_DECOUPLE: {
 			if (order->GetDecoupleSort()) {
 				SetDParam(0, order->GetDecoupleSortWait() ? STR_ORDER_DECOUPLE_SORT_WAIT_DETAILS : STR_ORDER_DECOUPLE_SORT_DETAILS);
+				if (order->GetNumDecouple() > 0) {
+					SetDParam(5, STR_ORDER_SORT_MAX_LENGTH);
+					SetDParam(6, order->GetNumDecouple());
+				}
 				break;
 			}
 			uint num_d = order->GetNumDecouple();
@@ -1219,7 +1223,7 @@ public:
 					this->GetWidget<NWidgetCore>(WID_O_DECOUPLE_SORT)->widget_data = !order->GetDecoupleSort() ? STR_ORDER_SORT_OFF : (order->GetDecoupleSortWait() ? STR_ORDER_SORT_WAIT : STR_ORDER_SORT_ON);
 					this->SetWidgetDisabledState(WID_O_ORDERS_FIRST, order->GetDecoupleSort());
 					this->SetWidgetDisabledState(WID_O_ORDERS_SECOND, order->GetDecoupleSort());
-					this->SetWidgetDisabledState(WID_O_DECOUPLE_VALUE, order->GetDecoupleSort());
+					this->GetWidget<NWidgetCore>(WID_O_DECOUPLE_VALUE)->widget_data = order->GetDecoupleSort() ? STR_ORDER_SORT_MAX_LENGTH_BUTTON : STR_ORDERS_DECOUPLE_VALUE_BUTTON;
 					this->DisableWidget(WID_O_DECOUPLE);
 					this->DisableWidget(WID_O_DELETE);
 					break;
@@ -1546,7 +1550,7 @@ public:
 				const Order *order = this->vehicle->GetOrder(this->OrderGetSel());
 				uint value = order->GetNumDecouple();
 				SetDParam(0, value);
-				ShowQueryString(STR_JUST_INT, STR_ORDER_DECOUPLE_VALUE_CAPT, 4, this, CS_NUMERAL, QSF_NONE);
+				ShowQueryString(STR_JUST_INT, order->GetDecoupleSort() ? STR_ORDER_SORT_MAX_LENGTH_CAPT : STR_ORDER_DECOUPLE_VALUE_CAPT, 4, this, CS_NUMERAL, QSF_NONE);
 				break;
 			}
 

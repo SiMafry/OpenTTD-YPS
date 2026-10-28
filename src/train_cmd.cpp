@@ -39,6 +39,8 @@
 #include "economy_base.h"
 #include "texteff.hpp"
 #include "timetable.h"
+#include "pbs.h"
+#include "signal_func.h"
 #include "group.h"
 #include "depot_base.h"
 #include "waypoint_base.h"
@@ -54,6 +56,9 @@ Train *ReverseTrainDirection(Train *v, bool run_around = false);
 static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip);
 static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
 static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
+static void EnterYardDepot(Train *v, StationID station, TileIndex depot);
+static bool TryReleaseFromYardDepot(Train *v);
+static Vehicle *TrainOnTileEnum(Vehicle *v, void *);
 
 extern void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index);
 extern void ChangeVehicleNews(VehicleID from_index, VehicleID to_index);
@@ -3847,6 +3852,23 @@ static void AdvanceSavedPosition(const Order *first, VehicleOrderID &index, Stat
 }
 
 /**
+ * A train leaves a station: every coupled wagon group, for which this station
+ * is the next one in its own orders, has now reached it. (Shunting yards
+ * already did this on arrival.)
+ * @param v Front of the train.
+ * @param station The station being left.
+ */
+void AdvanceCoupledGroupsAtStation(Train *v, StationID station)
+{
+	if (station == INVALID_STATION) return;
+	for (Train *u = v; u != NULL; u = u->Next()) {
+		if (u->drawer_orders == NULL) continue;
+		AdvanceSavedPosition(u->drawer_orders, u->drawer_real_index, station);
+		u->drawer_impl_index = u->drawer_real_index;
+	}
+}
+
+/**
  * Same as #AdvanceSavedPosition for a group waiting in a yard depot (its real orders).
  * @param g Front of the group.
  * @param yard The yard station.
@@ -4142,10 +4164,15 @@ static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, Platf
 	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
 	if (loco_dest == INVALID_STATION) return false;
 
+	/* Maximum number of vehicles (units, like for decoupling) set in the order, 0: the platform decides. */
+	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
+	uint max_units = (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) ? sort_order->GetNumDecouple() : 0;
+
 	std::vector<Train *> waiting;
 	Train *t;
 	FOR_ALL_TRAINS(t) {
 		if (!t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
+		if (HasBit(t->flags, VRF_YARD_IN_DEPOT)) continue; // a locomotive waiting there itself
 		AdvanceGroupPosition(t, station);
 		if (WaitingGroupDestination(t, station) != loco_dest) continue;
 		waiting.push_back(t);
@@ -4154,6 +4181,7 @@ static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, Platf
 	bool added = false;
 	for (size_t i = 0; i < waiting.size(); i++) {
 		if (!InsidePlatform(TrainBackCoordinate(v, line, waiting[i]), line)) continue; // does not fit: waits for the next train
+		if (max_units > 0 && CountVehiclesInVehicles(v) + CountVehiclesInVehicles(waiting[i]) > max_units) continue;
 		TakeGroupFromDepot(v, waiting[i]);
 		NormaliseTrainHead(v, CCF_ARRANGE_STATION);
 		added = true;
@@ -4174,7 +4202,7 @@ static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, Platf
  * @param v Front of the train.
  * @return Front of the train afterwards.
  */
-static Train *FinishSortTrainInYard(Train *v)
+static Train *FinishSortTrainInYard(Train *v, bool allow_wait = true)
 {
 	ClrBit(v->flags, VRF_YARD_SORT_PENDING);
 	StationID station = v->last_station_visited;
@@ -4211,13 +4239,223 @@ static Train *FinishSortTrainInYard(Train *v)
 	 * train does not block the station throat for the others. */
 	FreeTrainTrackReservation(v);
 
-	/* 'Wait for load': do not leave without any wagon group. */
+	/* 'Wait for load': do not leave without any wagon group; wait in the
+	 * yard depot so the platform is free for other trains. */
 	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
-	if (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort() && sort_order->GetDecoupleSortWait() &&
+	if (allow_wait && sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort() && sort_order->GetDecoupleSortWait() &&
 			v->current_order.IsType(OT_LOADING) && !TrainHasWagonGroups(v)) {
-		SetBit(v->flags, VRF_YARD_WAITING);
+		EnterYardDepot(v, station, depot);
 	}
 	return v;
+}
+
+/**
+ * Remove the reservation of the whole platform a tile belongs to.
+ * @param tile A platform tile.
+ */
+static void UnreservePlatform(TileIndex tile)
+{
+	if (!IsRailStationTile(tile)) return;
+	Axis axis = GetRailStationAxis(tile);
+	DiagDirection back = AxisToDiagDir(axis);
+	TileIndex start = tile;
+	for (;;) {
+		TileIndex prev = TileAddByDiagDir(start, ReverseDiagDir(back));
+		if (!IsValidTile(prev) || !IsCompatibleTrainStationTile(prev, start)) break;
+		start = prev;
+	}
+	SetRailStationPlatformReservation(start, back, false);
+}
+
+/**
+ * A locomotive waiting for load goes into the yard depot (invisibly, like
+ * the stored wagon groups), so it does not block a platform.
+ * @param v Front of the train, loading in the yard.
+ * @param station The yard station.
+ * @param depot The yard depot.
+ */
+static void EnterYardDepot(Train *v, StationID station, TileIndex depot)
+{
+	if (v->current_order.IsType(OT_LOADING)) v->LeaveStation();
+	ClrBit(v->flags, VRF_LEAVING_STATION);
+	ClrBit(v->flags, VRF_YARD_WAITING);
+	FreeTrainTrackReservation(v);
+
+	/* Free the platform and tell the signals. */
+	TileIndex old_tile = v->tile;
+	Track old_track = TrackBitsToTrack(v->track);
+	UnreservePlatform(v->tile);
+	if (v->Last()->tile != v->tile) UnreservePlatform(v->Last()->tile);
+
+	DiagDirection dir = GetRailDepotDirection(depot);
+	int x = TileX(depot) * TILE_SIZE | _vehicle_initial_x_fract[dir];
+	int y = TileY(depot) * TILE_SIZE | _vehicle_initial_y_fract[dir];
+	for (Train *u = v; u != NULL; u = u->Next()) {
+		u->tile = depot;
+		u->x_pos = x;
+		u->y_pos = y;
+		u->z_pos = GetSlopePixelZ(x, y);
+		u->direction = DiagDirToDir(dir);
+		u->track = TRACK_BIT_DEPOT;
+		u->vehstatus |= VS_HIDDEN;
+		ClrBit(u->gv_flags, GVF_GOINGUP_BIT);
+		ClrBit(u->gv_flags, GVF_GOINGDOWN_BIT);
+		u->UpdatePosition();
+		u->UpdateViewport(true, false);
+	}
+	v->cur_speed = 0;
+	v->subspeed = 0;
+	v->vehstatus |= VS_STOPPED;
+	v->last_station_visited = station;
+	/* Stay at the yard order. */
+	const Order *order = v->GetOrder(v->cur_implicit_order_index);
+	if (order != NULL) v->current_order.AssignOrder(*order);
+	v->current_order_time = 0;
+	SetBit(v->flags, VRF_YARD_IN_DEPOT);
+
+	if (old_track != INVALID_TRACK) {
+		AddTrackToSignalBuffer(old_tile, old_track, v->owner);
+		UpdateSignalsInBuffer();
+	}
+	InvalidateWindowData(WC_VEHICLE_DEPOT, depot);
+	SetWindowDirty(WC_VEHICLE_VIEW, v->index);
+	SetWindowWidgetDirty(WC_VEHICLE_VIEW, v->index, WID_VV_START_STOP);
+	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
+}
+
+/**
+ * Find a free platform in a station: no train on it and nothing reserved.
+ * @param station The station.
+ * @param length Required length in pixels.
+ * @param start Gets the first tile of the platform.
+ * @param dir Gets the direction from \a start along the platform.
+ * @return true if one was found.
+ */
+static bool FindFreePlatform(StationID station, int length, TileIndex &start, DiagDirection &dir)
+{
+	const Station *st = Station::Get(station);
+	int best = 0;
+	TILE_AREA_LOOP(tile, st->train_station) {
+		if (!IsRailStationTile(tile) || GetStationIndex(tile) != station) continue;
+		DiagDirection d = AxisToDiagDir(GetRailStationAxis(tile));
+		TileIndex prev = TileAddByDiagDir(tile, ReverseDiagDir(d));
+		if (IsValidTile(prev) && IsCompatibleTrainStationTile(prev, tile)) continue; // not the start of a platform
+
+		int tiles = 0;
+		bool free = true;
+		for (TileIndex t = tile; IsValidTile(t) && IsCompatibleTrainStationTile(t, tile); t = TileAddByDiagDir(t, d)) {
+			if (HasStationReservation(t) || HasVehicleOnPos(t, NULL, &TrainOnTileEnum)) {
+				free = false;
+				break;
+			}
+			tiles++;
+		}
+		if (!free || tiles * (int)TILE_SIZE < length || tiles <= best) continue;
+		best = tiles;
+		start = tile;
+		dir = d;
+	}
+	return best > 0;
+}
+
+/**
+ * Put a train from the yard depot onto a free platform of the yard.
+ * @param v Front of the train.
+ * @param start First tile of the platform.
+ * @param dir Direction along the platform; the train faces this way.
+ */
+static void PlaceTrainOnPlatform(Train *v, TileIndex start, DiagDirection dir)
+{
+	TileIndex end = start;
+	for (;;) {
+		TileIndex next = TileAddByDiagDir(end, dir);
+		if (!IsValidTile(next) || !IsCompatibleTrainStationTile(next, start)) break;
+		end = next;
+	}
+	Axis axis = DiagDirToAxis(dir);
+	TrackBits track = AxisToTrackBits(axis);
+	int x = TileX(end) * TILE_SIZE + TILE_SIZE / 2;
+	int y = TileY(end) * TILE_SIZE + TILE_SIZE / 2;
+
+	for (Train *u = v; u != NULL; u = u->Next()) {
+		u->vehstatus &= ~VS_HIDDEN;
+		u->track = track;
+		u->direction = DiagDirToDir(dir);
+		u->x_pos = x;
+		u->y_pos = y;
+		u->tile = end;
+		u->z_pos = GetSlopePixelZ(x, y);
+	}
+	v->vehstatus &= ~VS_STOPPED;
+
+	SetRailStationPlatformReservation(start, dir, true);
+	AddTrackToSignalBuffer(start, AxisToTrack(axis), v->owner);
+	UpdateSignalsInBuffer();
+}
+
+/**
+ * A locomotive waiting in a yard depot: come out to a free platform when
+ * there is load for it, when the timetabled stay time is over, or when the
+ * player started it.
+ * @param v Front of the train (in the yard depot).
+ * @return true if it came out.
+ */
+static bool TryReleaseFromYardDepot(Train *v)
+{
+	StationID station = v->last_station_visited;
+	if (!Station::IsValidID(station) || !IsRailDepotTile(v->tile)) {
+		ClrBit(v->flags, VRF_YARD_IN_DEPOT);
+		return false;
+	}
+	TileIndex depot = v->tile;
+
+	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
+	uint max_units = (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) ? sort_order->GetNumDecouple() : 0;
+	bool have_load = false;
+	if (loco_dest != INVALID_STATION) {
+		Train *t;
+		FOR_ALL_TRAINS(t) {
+			if (t == v || !t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
+			if (HasBit(t->flags, VRF_YARD_IN_DEPOT)) continue;
+			AdvanceGroupPosition(t, station);
+			if (max_units > 0 && CountVehiclesInVehicles(v) + CountVehiclesInVehicles(t) > max_units) continue;
+			if (WaitingGroupDestination(t, station) == loco_dest) {
+				have_load = true;
+				break;
+			}
+		}
+	}
+	const Order *order = v->GetOrder(v->cur_implicit_order_index);
+	uint max_wait = (order != NULL) ? order->GetTimetabledWait() : 0;
+	bool timeout = max_wait > 0 && v->current_order_time >= max_wait;
+	bool started = (v->vehstatus & VS_STOPPED) == 0;
+	if (!have_load && !timeout && !started) return false;
+
+	TileIndex start;
+	DiagDirection dir;
+	if (!FindFreePlatform(station, v->gcache.cached_total_length, start, dir)) {
+		/* No free platform: try again later. */
+		v->vehstatus |= VS_STOPPED;
+		return false;
+	}
+
+	ClrBit(v->flags, VRF_YARD_IN_DEPOT);
+	PlaceTrainOnPlatform(v, start, dir);
+	PlatformLine line;
+	if (GetPlatformLine(v, station, line)) LayOutTrainInPlatform(v, line);
+
+	/* Stop here as if it just arrived, then pick up the load. */
+	if (order != NULL) v->current_order.AssignOrder(*order);
+	v->last_station_visited = station;
+	v->force_proceed = TFP_NONE;
+	v->BeginLoading();
+	FinishSortTrainInYard(v, false);
+
+	InvalidateWindowData(WC_VEHICLE_DEPOT, depot);
+	SetWindowDirty(WC_VEHICLE_VIEW, v->index);
+	SetWindowWidgetDirty(WC_VEHICLE_VIEW, v->index, WID_VV_START_STOP);
+	return true;
 }
 
 /**
@@ -4262,6 +4500,10 @@ static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner ow
 {
 	Train *t;
 	FOR_ALL_TRAINS(t) {
+		if (t->IsPrimaryVehicle() && t->owner == owner && HasBit(t->flags, VRF_YARD_IN_DEPOT) && t->last_station_visited == station && t->tile == depot) {
+			TryReleaseFromYardDepot(t);
+			continue;
+		}
 		if (!t->IsPrimaryVehicle() || t->owner != owner || !HasBit(t->flags, VRF_YARD_WAITING)) continue;
 		if (t->last_station_visited != station || !t->current_order.IsType(OT_LOADING)) continue;
 		PlatformLine line;
@@ -5585,7 +5827,8 @@ static bool TryStopAtCurrentStation(Train *v)
 	bool last_in = IsRailStationTile(last->tile) && GetStationIndex(last->tile) == station;
 	if (!front_in && !last_in) return false;
 
-	if (!PreviousOrderStopsAt(v, station)) return false;
+	/* A train without power can not drive in, so it would never arrive. */
+	if (v->gcache.cached_power != 0 && !PreviousOrderStopsAt(v, station)) return false;
 
 	ClrBit(v->flags, VRF_LEAVING_STATION);
 	TrainEnterStation(v, station);
@@ -5736,6 +5979,11 @@ static bool TrainLocoHandler(Train *v, bool mode)
 	/* Shunting yard: finish sorting now that the train stands in the platform. */
 	if (HasBit(v->flags, VRF_YARD_SORT_PENDING) && !mode) FinishSortTrainInYard(v);
 	if (HasBit(v->flags, VRF_YARD_WAITING) && !mode) HandleYardWaiting(v);
+	if (HasBit(v->flags, VRF_YARD_IN_DEPOT)) {
+		/* Waiting in the yard depot for load: look about once a day, or when started by the player. */
+		if (!mode && (v->current_order_time % DAY_TICKS == 0 || !(v->vehstatus & VS_STOPPED))) TryReleaseFromYardDepot(v);
+		if (HasBit(v->flags, VRF_YARD_IN_DEPOT)) return true;
+	}
 
 	if (HasBit(v->flags, VRF_REVERSING) && v->cur_speed == 0) {
 		if (!mode) return true;
