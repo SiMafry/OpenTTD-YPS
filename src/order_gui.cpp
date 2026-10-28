@@ -121,6 +121,13 @@ static const StringID _order_couple_load_drowdown[] = {
 	INVALID_STRING_ID
 };
 
+static const StringID _order_sort_dropdown[] = {
+	STR_ORDER_SORT_OFF,
+	STR_ORDER_SORT_ON,
+	STR_ORDER_SORT_WAIT,
+	INVALID_STRING_ID
+};
+
 static const StringID _order_decouple_orders_drowdown[] = {
 	STR_ORDERS_DECOUPLE_KEEP_ORDERS,
 	STR_ORDERS_DECOUPLE_KEEP_ORDERS_NO_LOAD,
@@ -398,7 +405,7 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 
 		case OT_DECOUPLE: {
 			if (order->GetDecoupleSort()) {
-				SetDParam(0, STR_ORDER_DECOUPLE_SORT_DETAILS);
+				SetDParam(0, order->GetDecoupleSortWait() ? STR_ORDER_DECOUPLE_SORT_WAIT_DETAILS : STR_ORDER_DECOUPLE_SORT_DETAILS);
 				break;
 			}
 			uint num_d = order->GetNumDecouple();
@@ -1209,7 +1216,7 @@ public:
 				case OT_DECOUPLE: {
 					assert(this->vehicle->type == VEH_TRAIN);
 					train_row_sel->SetDisplayedPlane(DP_GROUNDVEHICLE_ROW_DECOUPLE);
-					this->SetWidgetLoweredState(WID_O_DECOUPLE_SORT, order->GetDecoupleSort());
+					this->GetWidget<NWidgetCore>(WID_O_DECOUPLE_SORT)->widget_data = !order->GetDecoupleSort() ? STR_ORDER_SORT_OFF : (order->GetDecoupleSortWait() ? STR_ORDER_SORT_WAIT : STR_ORDER_SORT_ON);
 					this->SetWidgetDisabledState(WID_O_ORDERS_FIRST, order->GetDecoupleSort());
 					this->SetWidgetDisabledState(WID_O_ORDERS_SECOND, order->GetDecoupleSort());
 					this->SetWidgetDisabledState(WID_O_DECOUPLE_VALUE, order->GetDecoupleSort());
@@ -1520,10 +1527,10 @@ public:
 			}
 
 			case WID_O_DECOUPLE_SORT: {
-				VehicleOrderID sel_ord = this->OrderGetSel();
-				const Order *order = this->vehicle->GetOrder(sel_ord);
+				const Order *order = this->vehicle->GetOrder(this->OrderGetSel());
 				if (order == NULL || !order->IsType(OT_DECOUPLE)) break;
-				DoCommandP(this->vehicle->tile, this->vehicle->index + (sel_ord << 20), MOF_DECOUPLE_SORT | ((order->GetDecoupleSort() ? 0 : 1) << 8), CMD_MODIFY_ORDER | CMD_MSG(STR_ERROR_CAN_T_MODIFY_THIS_ORDER));
+				int sel = !order->GetDecoupleSort() ? 0 : (order->GetDecoupleSortWait() ? 2 : 1);
+				ShowDropDownMenu(this, _order_sort_dropdown, sel, WID_O_DECOUPLE_SORT, 0, 0);
 				break;
 			}
 
@@ -1636,6 +1643,10 @@ public:
 
 			case WID_O_COUPLE_LOAD:
 				OrderClick_CoupleLoad(index);
+				break;
+
+			case WID_O_DECOUPLE_SORT:
+				DoCommandP(this->vehicle->tile, this->vehicle->index + (this->OrderGetSel() << 20), MOF_DECOUPLE_SORT | (index << 8), CMD_MODIFY_ORDER | CMD_MSG(STR_ERROR_CAN_T_MODIFY_THIS_ORDER));
 				break;
 
 			case WID_O_ORDERS_FIRST:
@@ -1855,7 +1866,7 @@ static const NWidgetPart _nested_orders_train_widgets[] = {
 															SetDataTip(STR_ORDERS_DECOUPLE_SECOND_KEEP_ORDERS_BUTTON, STR_ORDER_CONDITIONAL_COMPARATOR_TOOLTIP), SetResize(1, 0),
 				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_DECOUPLE_VALUE), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDERS_DECOUPLE_VALUE_BUTTON, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
-				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_DECOUPLE_SORT), SetMinimalSize(93, 12), SetFill(1, 0),
+				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_O_DECOUPLE_SORT), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDER_DECOUPLE_SORT_BUTTON, STR_ORDER_DECOUPLE_SORT_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 		EndContainer(),

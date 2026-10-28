@@ -183,6 +183,8 @@ public:
 	inline bool GetCoupleSameDestination() const { return HasBit(this->decouple_flags, 0); }
 	/** Decouple: sort the train in a shunting yard instead of a simple cut. @pre IsType(OT_DECOUPLE) */
 	inline bool GetDecoupleSort() const { return HasBit(this->decouple_flags, 0); }
+	/** Decouple (sort): wait in the yard until there is something to take along. @pre IsType(OT_DECOUPLE) */
+	inline bool GetDecoupleSortWait() const { return HasBit(this->flags, 3); }
 	/** What orders should first part get */
 	inline OrderDecoupleOrdersFlags GetDecoupleFirstOrdersType() const { return (OrderDecoupleOrdersFlags)GB(this->flags, 0, 3); }
 	/** What orders should second part get */
@@ -218,6 +220,7 @@ public:
 	inline void SetNumCouple(uint8 value) { SB(this->decouple_flags, 1, 7, value); }
 	inline void SetCoupleSameDestination(bool value) { SB(this->decouple_flags, 0, 1, value ? 1 : 0); }
 	inline void SetDecoupleSort(bool value) { SB(this->decouple_flags, 0, 1, value ? 1 : 0); }
+	inline void SetDecoupleSortWait(bool value) { SB(this->flags, 3, 1, value ? 1 : 0); }
 	/** Set what orders should first part get */
 	inline void SetDecoupleFirstOrdersType(OrderDecoupleOrdersFlags orders_type) { SB(this->flags, 0, 3, orders_type); }
 	/** Set what orders should second part get */

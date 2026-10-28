@@ -1526,8 +1526,11 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 			break;
 
 		case MOF_COUPLE_SAME_DEST:
-		case MOF_DECOUPLE_SORT:
 			if (data > 1) return CMD_ERROR;
+			break;
+
+		case MOF_DECOUPLE_SORT: // 0: no, 1: sort, 2: sort and wait for load
+			if (data > 2) return CMD_ERROR;
 			break;
 	}
 
@@ -1659,6 +1662,7 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 			case MOF_DECOUPLE_SORT:
 				order->SetDecoupleSort(data != 0);
+				order->SetDecoupleSortWait(data == 2);
 				break;
 
 			case MOF_FIRST_ORDERS:

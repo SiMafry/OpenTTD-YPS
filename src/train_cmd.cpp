@@ -53,6 +53,7 @@
 Train *ReverseTrainDirection(Train *v, bool run_around = false);
 static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip);
 static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
+static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
 
 extern void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index);
 extern void ChangeVehicleNews(VehicleID from_index, VehicleID to_index);
@@ -4104,6 +4105,7 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	for (size_t i = 1; i < segments.size(); i++) {
 		if (!keep[i]) StoreGroupInDepot(segments[i], depot);
 	}
+	HandOverToWaitingTrains(station, depot, v->owner);
 
 	NormaliseTrainHead(v, CCF_ARRANGE_STATION);
 
@@ -4112,6 +4114,57 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	SetBit(v->flags, VRF_YARD_SORT_PENDING);
 	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
 	return v;
+}
+
+/**
+ * Does the train take along any wagon group (a part that was coupled)?
+ * @param v Front of the train.
+ */
+static bool TrainHasWagonGroups(Train *v)
+{
+	for (Train *u = v; u != NULL && u->Next() != NULL; u = u->Next()) {
+		if (IsCouplingPoint(u, u->Next())) return true;
+	}
+	return false;
+}
+
+/**
+ * Couple the groups waiting in a yard depot for the next station of a train,
+ * oldest first, as long as the train fits the platform.
+ * @param v Front of the train, standing in the yard platform.
+ * @param station The yard station.
+ * @param depot The yard depot.
+ * @param line The platform.
+ * @return true if a group was added.
+ */
+static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, PlatformLine &line)
+{
+	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+	if (loco_dest == INVALID_STATION) return false;
+
+	std::vector<Train *> waiting;
+	Train *t;
+	FOR_ALL_TRAINS(t) {
+		if (!t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
+		AdvanceGroupPosition(t, station);
+		if (WaitingGroupDestination(t, station) != loco_dest) continue;
+		waiting.push_back(t);
+	}
+
+	bool added = false;
+	for (size_t i = 0; i < waiting.size(); i++) {
+		if (!InsidePlatform(TrainBackCoordinate(v, line, waiting[i]), line)) continue; // does not fit: waits for the next train
+		TakeGroupFromDepot(v, waiting[i]);
+		NormaliseTrainHead(v, CCF_ARRANGE_STATION);
+		added = true;
+	}
+
+	LayOutTrainInPlatform(v, line);
+	v->ConsistChanged(CCF_ARRANGE_STATION);
+	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
+	SetWindowDirty(WC_VEHICLE_DETAILS, v->index);
+	SetWindowDirty(WC_VEHICLE_VIEW, v->index);
+	return added;
 }
 
 /**
@@ -4151,29 +4204,70 @@ static Train *FinishSortTrainInYard(Train *v)
 	if (!GetPlatformLine(v, station, line)) return v;
 	LayOutTrainInPlatform(v, line);
 
-	/* Add waiting groups for our destination, oldest first, as long as the platform allows. */
-	if (loco_dest != INVALID_STATION) {
-		std::vector<Train *> waiting;
-		Train *t;
-		FOR_ALL_TRAINS(t) {
-			if (!t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
-			AdvanceGroupPosition(t, station);
-			if (WaitingGroupDestination(t, station) != loco_dest) continue;
-			waiting.push_back(t);
-		}
-		for (size_t i = 0; i < waiting.size(); i++) {
-			if (!InsidePlatform(TrainBackCoordinate(v, line, waiting[i]), line)) continue; // does not fit: waits for the next train
-			TakeGroupFromDepot(v, waiting[i]);
-			NormaliseTrainHead(v, CCF_ARRANGE_STATION);
-		}
+	AddWaitingGroups(v, station, depot, line);
+
+	/* Turning around reserved the way out already. Give it back while the
+	 * train stands here (it is reserved again when leaving), so a waiting
+	 * train does not block the station throat for the others. */
+	FreeTrainTrackReservation(v);
+
+	/* 'Wait for load': do not leave without any wagon group. */
+	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
+	if (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort() && sort_order->GetDecoupleSortWait() &&
+			v->current_order.IsType(OT_LOADING) && !TrainHasWagonGroups(v)) {
+		SetBit(v->flags, VRF_YARD_WAITING);
+	}
+	return v;
+}
+
+/**
+ * A train waits in a shunting yard for wagon groups ('wait for load').
+ * Called every tick while it is loading there.
+ * @param v Front of the train.
+ */
+static void HandleYardWaiting(Train *v)
+{
+	if (!v->current_order.IsType(OT_LOADING)) {
+		ClrBit(v->flags, VRF_YARD_WAITING);
+		return;
 	}
 
-	LayOutTrainInPlatform(v, line);
-	v->ConsistChanged(CCF_ARRANGE_STATION);
-	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
-	SetWindowDirty(WC_VEHICLE_DETAILS, v->index);
-	SetWindowDirty(WC_VEHICLE_VIEW, v->index);
-	return v;
+	/* Look in the store about once a day. */
+	if (v->current_order_time % DAY_TICKS == 0) {
+		StationID station = v->last_station_visited;
+		TileIndex depot = Station::IsValidID(station) ? FindYardDepot(Station::Get(station), v) : INVALID_TILE;
+		PlatformLine line;
+		if (depot != INVALID_TILE && GetPlatformLine(v, station, line)) AddWaitingGroups(v, station, depot, line);
+	}
+
+	/* Got something, or waited as long as the timetable allows. */
+	uint max_wait = v->current_order.GetTimetabledWait();
+	if (TrainHasWagonGroups(v) || (max_wait > 0 && v->current_order_time >= max_wait)) {
+		ClrBit(v->flags, VRF_YARD_WAITING);
+		return;
+	}
+
+	/* Keep the train from leaving. */
+	ClrBit(v->vehicle_flags, VF_LOADING_FINISHED);
+}
+
+/**
+ * Wagon groups were just stored in a yard depot: give them right away to
+ * trains waiting for load in that yard.
+ * @param station The yard station.
+ * @param depot Its depot.
+ * @param owner Owner of the groups.
+ */
+static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner)
+{
+	Train *t;
+	FOR_ALL_TRAINS(t) {
+		if (!t->IsPrimaryVehicle() || t->owner != owner || !HasBit(t->flags, VRF_YARD_WAITING)) continue;
+		if (t->last_station_visited != station || !t->current_order.IsType(OT_LOADING)) continue;
+		PlatformLine line;
+		if (!GetPlatformLine(t, station, line)) continue;
+		AddWaitingGroups(t, station, depot, line);
+	}
 }
 
 /**
@@ -5592,7 +5686,7 @@ static bool IsOtherTrainBeforeNextSignal(const Train *v)
 	d.self = v;
 
 	CFollowTrackRail ft(v, GetRailTypeInfo(v->railtype)->compatible_railtypes);
-	for (int i = 0; i < 64; i++) {
+	for (int i = 0; i < 32; i++) {
 		if (!ft.Follow(tile, td)) return false;
 
 		/* The follower jumps over station platforms; look at the skipped tiles too. */
@@ -5641,6 +5735,7 @@ static bool TrainLocoHandler(Train *v, bool mode)
 
 	/* Shunting yard: finish sorting now that the train stands in the platform. */
 	if (HasBit(v->flags, VRF_YARD_SORT_PENDING) && !mode) FinishSortTrainInYard(v);
+	if (HasBit(v->flags, VRF_YARD_WAITING) && !mode) HandleYardWaiting(v);
 
 	if (HasBit(v->flags, VRF_REVERSING) && v->cur_speed == 0) {
 		if (!mode) return true;
@@ -5745,7 +5840,7 @@ static bool TrainLocoHandler(Train *v, bool mode)
 	 * with the parts of a just decoupled train, which no signal separates.
 	 * Before starting, also wait until the way to the next signal is free.
 	 * A train going to couple must get close. */
-	if (IsTrainBlockedAhead(v) || (v->cur_speed == 0 && IsOtherTrainBeforeNextSignal(v))) {
+	if (IsTrainBlockedAhead(v) || (v->cur_speed == 0 && IsRailStationTile(v->tile) && IsOtherTrainBeforeNextSignal(v))) {
 		v->cur_speed = 0;
 		v->subspeed = 0;
 		v->SetLastSpeed();

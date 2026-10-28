@@ -34,6 +34,7 @@ enum VehicleRailFlags {
 	VRF_TRAIN_STUCK                   = 8, ///< Train can't get a path reservation.
 	VRF_LEAVING_STATION               = 9, ///< Train is just leaving a station.
 	VRF_YARD_SORT_PENDING             = 10, ///< Shunting yard: add waiting groups in the next tick.
+	VRF_YARD_WAITING                  = 11, ///< Shunting yard: waiting for wagon groups ("wait for load").
 };
 
 /** Modes for ignoring signals. */
