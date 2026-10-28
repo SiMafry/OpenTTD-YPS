@@ -2628,7 +2628,9 @@ static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true)
 	t->cur_real_order_index = drawer->drawer_real_index < t->GetNumOrders() ? drawer->drawer_real_index : 0;
 	t->cur_implicit_order_index = drawer->drawer_impl_index < t->GetNumOrders() ? drawer->drawer_impl_index : 0;
 	const Order *current = t->GetOrder(t->cur_real_order_index);
-	if (skip_wait && current != NULL && current->IsType(OT_WAIT_COUPLE)) t->IncrementImplicitOrderIndex();
+	/* The saved position is the last place reached: the 'wait for couple'
+	 * where it was coupled, or the last shunting yard it went through. */
+	if (skip_wait && current != NULL && (current->IsType(OT_WAIT_COUPLE) || current->IsType(OT_GOTO_STATION))) t->IncrementImplicitOrderIndex();
 
 	GroupID g = drawer->drawer_group;
 	if (!IsDefaultGroupID(g) && Group::IsValidID(g) && Group::Get(g)->owner == t->owner && Group::Get(g)->vehicle_type == VEH_TRAIN) {
@@ -3798,8 +3800,7 @@ static void StoreGroupInDepot(TrainSegment &seg, TileIndex depot)
 	GroupStatistics::CountVehicle(f, 1);
 
 	if (seg.drawer != NULL) RestoreCoupledOrders(f, seg.drawer, false);
-	const Order *cur = f->GetOrder(f->cur_real_order_index);
-	if (cur == NULL || !cur->IsType(OT_WAIT_COUPLE)) {
+	if (f->GetNumOrders() == 0) {
 		/* No own orders saved: it just waits here. */
 		DeleteVehicleOrders(f, false, true);
 		CreateWaitForCoupleOrder(f);
@@ -3819,9 +3820,42 @@ static void StoreGroupInDepot(TrainSegment &seg, TileIndex depot)
  */
 static StationID WaitingGroupDestination(const Train *g, StationID yard)
 {
-	const Order *cur = g->GetOrder(g->cur_real_order_index);
-	if (cur == NULL || !cur->IsType(OT_WAIT_COUPLE)) return INVALID_STATION;
+	if (g->GetNumOrders() == 0) return INVALID_STATION;
 	return NextStationInOrders(g, g->cur_real_order_index + 1, yard);
+}
+
+/**
+ * A wagon group reached a shunting yard: when the yard is the next station in
+ * its own orders, that is now the last place reached.
+ * @param first First of the saved orders.
+ * @param index Saved position (last place reached); updated.
+ * @param yard The yard station.
+ */
+static void AdvanceSavedPosition(const Order *first, VehicleOrderID &index, StationID yard)
+{
+	int num = 0;
+	for (const Order *o = first; o != NULL; o = o->next) num++;
+	for (int i = 1; i <= num; i++) {
+		int at = (index + i) % num;
+		const Order *o = first;
+		for (int j = 0; j < at; j++) o = o->next;
+		if (!o->IsType(OT_GOTO_STATION)) continue;
+		if (o->GetDestination() == yard) index = at;
+		return; // only the very next station counts
+	}
+}
+
+/**
+ * Same as #AdvanceSavedPosition for a group waiting in a yard depot (its real orders).
+ * @param g Front of the group.
+ * @param yard The yard station.
+ */
+static void AdvanceGroupPosition(Train *g, StationID yard)
+{
+	if (g->orders.list == NULL) return;
+	VehicleOrderID index = g->cur_real_order_index;
+	AdvanceSavedPosition(g->GetFirstOrder(), index, yard);
+	g->cur_real_order_index = g->cur_implicit_order_index = index;
 }
 
 /**
@@ -4049,7 +4083,11 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	std::vector<bool> keep(segments.size(), true);
 	for (size_t i = 1; i < segments.size(); i++) {
 		if (segments[i].drawer == NULL) continue; // nothing known about it: stays with the train
-		StationID dest = NextStationInSavedOrders(segments[i].drawer->drawer_orders, segments[i].drawer->drawer_real_index, station);
+		Train *d = segments[i].drawer;
+		/* The group has reached this yard: move on in its own orders. */
+		AdvanceSavedPosition(d->drawer_orders, d->drawer_real_index, station);
+		d->drawer_impl_index = d->drawer_real_index;
+		StationID dest = NextStationInSavedOrders(d->drawer_orders, d->drawer_real_index, station);
 		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest);
 	}
 	for (size_t i = 0; i < segments.size(); i++) segments[i].last->SetNext(NULL);
@@ -4119,6 +4157,7 @@ static Train *FinishSortTrainInYard(Train *v)
 		Train *t;
 		FOR_ALL_TRAINS(t) {
 			if (!t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
+			AdvanceGroupPosition(t, station);
 			if (WaitingGroupDestination(t, station) != loco_dest) continue;
 			waiting.push_back(t);
 		}
