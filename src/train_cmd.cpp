@@ -2428,7 +2428,7 @@ uint GetDecoupleVehicleAuto(Train *v)
 
 static Train *GetDecoupleVehicle(Train *v)
 {
-	Order *decouple_order = v->orders.list->GetOrderAt(v->cur_implicit_order_index + 1);
+	Order *decouple_order = v->orders.list->GetOrderAt(v->cur_real_order_index + 1);
 	uint num_decouple = decouple_order->GetNumDecouple();
 	if (num_decouple == 0) num_decouple = GetDecoupleVehicleAuto(v);
 	Train *ret = v->GetNextVehicle();
@@ -2660,7 +2660,7 @@ void InheritWaitForCoupleOrders(Train *v, Train *u)
 	Order *copy_destination = NULL;
 
 	station_order->AssignOrder(v->current_order);
-	station_decouple_order->AssignOrder(*v->orders.list->GetOrderAt(v->cur_implicit_order_index + 1));
+	station_decouple_order->AssignOrder(*v->orders.list->GetOrderAt(v->cur_real_order_index + 1));
 	wait_for_couple_order->MakeWaitCouple();
 
 	OrderIDStack next_station = v->orders.list->GetNextStoppingOrder(v);
@@ -2717,7 +2717,7 @@ static bool OwnOrdersStopHere(Train *t)
 
 void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 {
-	Order *after_decouple_flags = v->orders.list->GetOrderAt(v->cur_implicit_order_index + 1);
+	Order *after_decouple_flags = v->orders.list->GetOrderAt(v->cur_real_order_index + 1);
 	assert(after_decouple_flags->GetType() == OT_DECOUPLE);
 
 	/* Copy the flags; the order itself may go away when the first part changes its orders. */
@@ -4075,7 +4075,7 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	}
 
 	/* Where does the locomotive go next? */
-	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+	StationID loco_dest = NextStationInOrders(v, v->cur_real_order_index + 1, station);
 
 	std::vector<TrainSegment> segments;
 	GetTrainSegments(v, segments);
@@ -4161,11 +4161,11 @@ static bool TrainHasWagonGroups(Train *v)
  */
 static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, PlatformLine &line)
 {
-	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+	StationID loco_dest = NextStationInOrders(v, v->cur_real_order_index + 1, station);
 	if (loco_dest == INVALID_STATION) return false;
 
 	/* Maximum number of vehicles (units, like for decoupling) set in the order, 0: the platform decides. */
-	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
+	const Order *sort_order = v->GetOrder(v->cur_real_order_index + 1);
 	uint max_units = (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) ? sort_order->GetNumDecouple() : 0;
 
 	std::vector<Train *> waiting;
@@ -4212,7 +4212,7 @@ static Train *FinishSortTrainInYard(Train *v, bool allow_wait = true)
 	PlatformLine line;
 	if (depot == INVALID_TILE || !GetPlatformLine(v, station, line)) return v;
 
-	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
+	StationID loco_dest = NextStationInOrders(v, v->cur_real_order_index + 1, station);
 
 	/* Face the way the train will leave: the locomotive goes to that end
 	 * ("runs around"), so the added groups are behind it. */
@@ -4241,7 +4241,7 @@ static Train *FinishSortTrainInYard(Train *v, bool allow_wait = true)
 
 	/* 'Wait for load': do not leave without any wagon group; wait in the
 	 * yard depot so the platform is free for other trains. */
-	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
+	const Order *sort_order = v->GetOrder(v->cur_real_order_index + 1);
 	if (allow_wait && sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort() && sort_order->GetDecoupleSortWait() &&
 			v->current_order.IsType(OT_LOADING) && !TrainHasWagonGroups(v)) {
 		EnterYardDepot(v, station, depot);
@@ -4308,7 +4308,7 @@ static void EnterYardDepot(Train *v, StationID station, TileIndex depot)
 	v->vehstatus |= VS_STOPPED;
 	v->last_station_visited = station;
 	/* Stay at the yard order. */
-	const Order *order = v->GetOrder(v->cur_implicit_order_index);
+	const Order *order = v->GetOrder(v->cur_real_order_index);
 	if (order != NULL) v->current_order.AssignOrder(*order);
 	v->current_order_time = 0;
 	SetBit(v->flags, VRF_YARD_IN_DEPOT);
@@ -4409,8 +4409,8 @@ static bool TryReleaseFromYardDepot(Train *v)
 	}
 	TileIndex depot = v->tile;
 
-	StationID loco_dest = NextStationInOrders(v, v->cur_implicit_order_index + 1, station);
-	const Order *sort_order = v->GetOrder(v->cur_implicit_order_index + 1);
+	StationID loco_dest = NextStationInOrders(v, v->cur_real_order_index + 1, station);
+	const Order *sort_order = v->GetOrder(v->cur_real_order_index + 1);
 	uint max_units = (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) ? sort_order->GetNumDecouple() : 0;
 	bool have_load = false;
 	if (loco_dest != INVALID_STATION) {
@@ -4426,7 +4426,7 @@ static bool TryReleaseFromYardDepot(Train *v)
 			}
 		}
 	}
-	const Order *order = v->GetOrder(v->cur_implicit_order_index);
+	const Order *order = v->GetOrder(v->cur_real_order_index);
 	uint max_wait = (order != NULL) ? order->GetTimetabledWait() : 0;
 	bool timeout = max_wait > 0 && v->current_order_time >= max_wait;
 	bool started = (v->vehstatus & VS_STOPPED) == 0;
@@ -4520,11 +4520,18 @@ static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner ow
 static void TrainEnterStation(Train *v, StationID station)
 {
 	v->last_station_visited = station;
+
+	/* Arrived at the station of the current order: drop implicit orders that
+	 * were not reached, as BeginLoading does, so the implicit and real order
+	 * indices agree before the decouple/sort order after it is looked up. */
+	if (v->current_order.IsType(OT_GOTO_STATION) && v->current_order.GetDestination() == station) {
+		v->DeleteUnreachedImplicitOrders();
+	}
 	
 	Train *u = NULL;
 	DecoupleLoad load_trains = DECOUPLE_NO_LOAD;
 	const Order *sort_order = v->current_order.GetDestination() == station && v->current_order.GetDecouple() == ODF_DECOUPLE ?
-			v->GetOrder(v->cur_implicit_order_index + 1) : NULL;
+			v->GetOrder(v->cur_real_order_index + 1) : NULL;
 	if (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) {
 		/* Shunting yard: sort the wagon groups, then stop here as usual. */
 		v = SortTrainInYard(v, station);
