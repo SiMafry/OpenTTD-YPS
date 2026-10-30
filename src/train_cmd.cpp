@@ -53,10 +53,13 @@
 #include "safeguards.h"
 
 Train *ReverseTrainDirection(Train *v, bool run_around = false);
+
 static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip);
 static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
-static bool SavedRoutesEqual(const Order *a, const Order *b);
 static bool IsCouplingMarker(const Train *u);
+static bool IsCouplingPoint(const Train *a, const Train *b);
+static bool SavedOrdersHaveStation(const Order *first);
+static void MoveCoupledOrders(Train *from, Train *to);
 static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
 static void EnterYardDepot(Train *v, StationID station, TileIndex depot);
 static bool TryReleaseFromYardDepot(Train *v);
@@ -2528,6 +2531,23 @@ static void MoveCoupledOrders(Train *from, Train *to)
  */
 static void SaveCoupledOrders(Train *part, const Train *neighbour)
 {
+	/* A part that only 'waits for couple' because its own orders were lost
+	 * (e.g. decoupled where nothing was saved) may still carry its real
+	 * orders from an earlier coupling at its other end: use those. */
+	if (part->orders.list == NULL || !SavedOrdersHaveStation(part->GetFirstOrder())) {
+		for (Train *w = part; w != NULL; w = w->Next()) {
+			if (w != part && IsCouplingPoint(w->Previous(), w)) break; // the next group starts here
+			if (w->drawer_orders != NULL && w->Next() != NULL && w->Next()->index == w->drawer_neighbour && SavedOrdersHaveStation(w->drawer_orders)) {
+				MoveCoupledOrders(w, part);
+				part->drawer_neighbour = neighbour->index;
+				for (Train *x = part->Next(); x != NULL; x = x->Next()) {
+					if (x->drawer_orders != NULL && !IsCouplingMarker(x)) x->ClearCoupledOrders();
+				}
+				return;
+			}
+		}
+	}
+
 	part->ClearCoupledOrders();
 
 	int num = part->GetNumOrders();
@@ -2550,7 +2570,7 @@ static void SaveCoupledOrders(Train *part, const Train *neighbour)
 
 	/* Old copies of these orders left inside the part would later look like a group of their own. */
 	for (Train *w = part->Next(); w != NULL; w = w->Next()) {
-		if (w->drawer_orders != NULL && !IsCouplingMarker(w) && SavedRoutesEqual(w->drawer_orders, first)) w->ClearCoupledOrders();
+		if (w->drawer_orders != NULL && !IsCouplingMarker(w)) w->ClearCoupledOrders();
 	}
 
 	part->drawer_orders = first;
@@ -3734,6 +3754,8 @@ struct TrainSegment {
  */
 static bool IsCouplingPoint(const Train *a, const Train *b)
 {
+	/* Never inside an articulated vehicle. */
+	if (b->IsArticulatedPart()) return false;
 	return (b->drawer_orders != NULL && b->drawer_neighbour == a->index) ||
 			(a->drawer_orders != NULL && a->drawer_neighbour == b->index);
 }
@@ -3763,42 +3785,36 @@ static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
 	/* Find the saved orders of each group: at its start pointing back, or at its end pointing forward. */
 	for (size_t i = 0; i < segments.size(); i++) {
 		TrainSegment &s = segments[i];
-		if (i > 0 && s.first->drawer_orders != NULL && s.first->drawer_neighbour == segments[i - 1].last->index) {
-			s.drawer = s.first;
-		} else if (i + 1 < segments.size() && s.last->drawer_orders != NULL && s.last->drawer_neighbour == segments[i + 1].first->index) {
-			s.drawer = s.last;
-		}
+		Train *back = (i > 0 && s.first->drawer_orders != NULL && s.first->drawer_neighbour == segments[i - 1].last->index) ? s.first : NULL;
+		Train *fwd = (i + 1 < segments.size() && s.last->drawer_orders != NULL && s.last->drawer_neighbour == segments[i + 1].first->index) ? s.last : NULL;
+		s.drawer = back != NULL ? back : fwd;
+		/* Both: prefer the one with a real route over a bare 'wait for couple'. */
+		if (back != NULL && fwd != NULL && fwd != back && !SavedOrdersHaveStation(back->drawer_orders) && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
 	}
 }
 
-/**
- * Do two lists of saved orders describe the same route (same kinds of orders
- * to the same places)?
- */
-static bool SavedRoutesEqual(const Order *a, const Order *b)
+/** Is there any station in a list of (saved) orders, i.e. more than a bare 'wait for couple'? */
+static bool SavedOrdersHaveStation(const Order *first)
 {
-	while (a != NULL && b != NULL) {
-		if (a->GetType() != b->GetType()) return false;
-		if ((a->IsType(OT_GOTO_STATION) || a->IsType(OT_GOTO_WAYPOINT) || a->IsType(OT_GOTO_DEPOT)) && a->GetDestination() != b->GetDestination()) return false;
-		a = a->next;
-		b = b->next;
+	for (const Order *o = first; o != NULL; o = o->next) {
+		if (o->IsType(OT_GOTO_STATION)) return true;
 	}
-	return a == NULL && b == NULL;
+	return false;
 }
 
 /** Do the saved orders of a vehicle still mark a place where something was coupled? */
 static bool IsCouplingMarker(const Train *u)
 {
 	if (u->drawer_orders == NULL) return false;
-	return (u->Previous() != NULL && u->Previous()->index == u->drawer_neighbour) ||
-			(u->Next() != NULL && u->Next()->index == u->drawer_neighbour);
+	return (u->Previous() != NULL && !u->IsArticulatedPart() && u->Previous()->index == u->drawer_neighbour) ||
+			(u->Next() != NULL && !u->Next()->IsArticulatedPart() && u->Next()->index == u->drawer_neighbour);
 }
 
 /**
- * Saved orders inside a group that no longer mark a coupling place:
- * - an old copy of the group's own route: forget it (it would split the group);
- * - a different route: a group that older versions lost track of when the
- *   group in front of it was taken out in a yard; it starts at that vehicle.
+ * Saved orders that no longer mark a coupling place (older versions could
+ * leave them behind): among the locomotive's own vehicles they mark a lost
+ * group, which is restored; inside a wagon group they are an old copy, which
+ * is forgotten. A group never starts inside an articulated vehicle.
  * @param v Front of the train.
  * @param segments Its segments.
  * @return true if something changed.
@@ -3810,10 +3826,17 @@ static bool RepairLostGroups(Train *v, const std::vector<TrainSegment> &segments
 		const Train *own = segments[i].drawer;
 		for (Train *u = segments[i].first; ; u = u->Next()) {
 			if (u != v && u->drawer_orders != NULL && u != own && !IsCouplingMarker(u)) {
-				if (own != NULL && SavedRoutesEqual(own->drawer_orders, u->drawer_orders)) {
-					u->ClearCoupledOrders();
+				Train *head = u;
+				while (head->IsArticulatedPart() && head->Previous() != NULL) head = head->Previous();
+				if (i == 0 && head != v && (head == u || head->drawer_orders == NULL)) {
+					/* Among the locomotive's own vehicles: a group that was lost
+					 * track of; it starts with the whole vehicle holding the orders. */
+					MoveCoupledOrders(u, head);
+					head->drawer_neighbour = head->Previous()->index;
 				} else {
-					u->drawer_neighbour = u->Previous()->index;
+					/* Inside a wagon group: an old copy left from an earlier
+					 * coupling. Forget it, the group keeps its own orders. */
+					u->ClearCoupledOrders();
 				}
 				changed = true;
 			}
@@ -3895,6 +3918,27 @@ static void StoreGroupInDepot(TrainSegment &seg, TileIndex depot)
 
 	InvalidateWindowData(WC_VEHICLE_DEPOT, depot);
 	SetWindowDirty(WC_VEHICLE_VIEW, f->index);
+}
+
+/**
+ * A wagon group waiting in a yard depot with only 'wait for couple' (its route
+ * was lost in older versions) gets its route back from saved orders it still carries.
+ * @param g Front of the group.
+ */
+static void RepairWaitingGroup(Train *g)
+{
+	if (g->orders.list != NULL && SavedOrdersHaveStation(g->GetFirstOrder())) return;
+	for (Train *w = g; w != NULL; w = w->Next()) {
+		if (w != g && IsCouplingPoint(w->Previous(), w) && !(w->Previous()->drawer_orders != NULL && w->Previous()->drawer_neighbour == w->index)) break; // another group
+		if (w->drawer_orders == NULL || !SavedOrdersHaveStation(w->drawer_orders)) continue;
+		if (!RestoreCoupledOrders(g, w, false)) return;
+		for (Train *x = g; x != NULL; x = x->Next()) {
+			if (x->drawer_orders != NULL && !IsCouplingMarker(x)) x->ClearCoupledOrders();
+		}
+		g->current_order.AssignOrder(*g->GetOrder(g->cur_real_order_index));
+		SetWindowDirty(WC_VEHICLE_VIEW, g->index);
+		return;
+	}
 }
 
 /**
@@ -4260,6 +4304,7 @@ static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, Platf
 	FOR_ALL_TRAINS(t) {
 		if (!t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
 		if (HasBit(t->flags, VRF_YARD_IN_DEPOT)) continue; // a locomotive waiting there itself
+		RepairWaitingGroup(t);
 		AdvanceGroupPosition(t, station);
 		if (WaitingGroupDestination(t, station) != loco_dest) continue;
 		waiting.push_back(t);
@@ -4505,6 +4550,7 @@ static bool TryReleaseFromYardDepot(Train *v)
 		FOR_ALL_TRAINS(t) {
 			if (t == v || !t->IsPrimaryVehicle() || t->owner != v->owner || t->tile != depot || !t->IsStoppedInDepot()) continue;
 			if (HasBit(t->flags, VRF_YARD_IN_DEPOT)) continue;
+			RepairWaitingGroup(t);
 			AdvanceGroupPosition(t, station);
 			if (max_units > 0 && CountVehiclesInVehicles(v) + CountVehiclesInVehicles(t) > max_units) continue;
 			if (WaitingGroupDestination(t, station) == loco_dest) {
