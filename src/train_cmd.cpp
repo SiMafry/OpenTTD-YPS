@@ -55,6 +55,8 @@
 Train *ReverseTrainDirection(Train *v, bool run_around = false);
 static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip);
 static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
+static bool SavedRoutesEqual(const Order *a, const Order *b);
+static bool IsCouplingMarker(const Train *u);
 static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
 static void EnterYardDepot(Train *v, StationID station, TileIndex depot);
 static bool TryReleaseFromYardDepot(Train *v);
@@ -2546,6 +2548,11 @@ static void SaveCoupledOrders(Train *part, const Train *neighbour)
 		last = copy;
 	}
 
+	/* Old copies of these orders left inside the part would later look like a group of their own. */
+	for (Train *w = part->Next(); w != NULL; w = w->Next()) {
+		if (w->drawer_orders != NULL && !IsCouplingMarker(w) && SavedRoutesEqual(w->drawer_orders, first)) w->ClearCoupledOrders();
+	}
+
 	part->drawer_orders = first;
 	part->drawer_neighbour = neighbour->index;
 	part->drawer_real_index = part->cur_real_order_index;
@@ -3765,6 +3772,58 @@ static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
 }
 
 /**
+ * Do two lists of saved orders describe the same route (same kinds of orders
+ * to the same places)?
+ */
+static bool SavedRoutesEqual(const Order *a, const Order *b)
+{
+	while (a != NULL && b != NULL) {
+		if (a->GetType() != b->GetType()) return false;
+		if ((a->IsType(OT_GOTO_STATION) || a->IsType(OT_GOTO_WAYPOINT) || a->IsType(OT_GOTO_DEPOT)) && a->GetDestination() != b->GetDestination()) return false;
+		a = a->next;
+		b = b->next;
+	}
+	return a == NULL && b == NULL;
+}
+
+/** Do the saved orders of a vehicle still mark a place where something was coupled? */
+static bool IsCouplingMarker(const Train *u)
+{
+	if (u->drawer_orders == NULL) return false;
+	return (u->Previous() != NULL && u->Previous()->index == u->drawer_neighbour) ||
+			(u->Next() != NULL && u->Next()->index == u->drawer_neighbour);
+}
+
+/**
+ * Saved orders inside a group that no longer mark a coupling place:
+ * - an old copy of the group's own route: forget it (it would split the group);
+ * - a different route: a group that older versions lost track of when the
+ *   group in front of it was taken out in a yard; it starts at that vehicle.
+ * @param v Front of the train.
+ * @param segments Its segments.
+ * @return true if something changed.
+ */
+static bool RepairLostGroups(Train *v, const std::vector<TrainSegment> &segments)
+{
+	bool changed = false;
+	for (size_t i = 0; i < segments.size(); i++) {
+		const Train *own = segments[i].drawer;
+		for (Train *u = segments[i].first; ; u = u->Next()) {
+			if (u != v && u->drawer_orders != NULL && u != own && !IsCouplingMarker(u)) {
+				if (own != NULL && SavedRoutesEqual(own->drawer_orders, u->drawer_orders)) {
+					u->ClearCoupledOrders();
+				} else {
+					u->drawer_neighbour = u->Previous()->index;
+				}
+				changed = true;
+			}
+			if (u == segments[i].last) break;
+		}
+	}
+	return changed;
+}
+
+/**
  * Find a train depot right next to a station, to be used as the store of a shunting yard.
  * @param st The station.
  * @param v The train (owner and rail type).
@@ -4096,18 +4155,9 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	/* Where does the locomotive go next? */
 	StationID loco_dest = NextStationInOrders(v, v->cur_real_order_index + 1, station);
 
-	/* Repair groups whose saved orders point at a vehicle that is no longer next
-	 * to them (older versions lost track of a group when the group in front of
-	 * it was taken out in a yard): the group starts at the vehicle holding them. */
-	for (Train *u = v->Next(); u != NULL; u = u->Next()) {
-		if (u->drawer_orders == NULL) continue;
-		if (u->Previous()->index == u->drawer_neighbour) continue;
-		if (u->Next() != NULL && u->Next()->index == u->drawer_neighbour) continue;
-		u->drawer_neighbour = u->Previous()->index;
-	}
-
 	std::vector<TrainSegment> segments;
 	GetTrainSegments(v, segments);
+	if (RepairLostGroups(v, segments)) GetTrainSegments(v, segments);
 
 	/* The part with the locomotive must be the front; it stays. */
 	size_t main = 0;
