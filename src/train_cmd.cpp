@@ -2499,6 +2499,25 @@ void Train::ClearCoupledOrders()
 }
 
 /**
+ * Move the saved own orders ("drawer") of a wagon group to another vehicle of the group.
+ * @param from Vehicle holding them now.
+ * @param to Vehicle to hold them.
+ */
+static void MoveCoupledOrders(Train *from, Train *to)
+{
+	if (from == to) return;
+	to->ClearCoupledOrders();
+	to->drawer_orders = from->drawer_orders;
+	to->drawer_neighbour = from->drawer_neighbour;
+	to->drawer_share_with = from->drawer_share_with;
+	to->drawer_real_index = from->drawer_real_index;
+	to->drawer_impl_index = from->drawer_impl_index;
+	to->drawer_group = from->drawer_group;
+	from->drawer_orders = NULL;
+	from->ClearCoupledOrders();
+}
+
+/**
  * When a waiting train is coupled to another one, keep a copy of its own orders
  * ("drawer") on its first vehicle, so it can get them back when it is decoupled
  * at the same place later (decouple option "Own orders").
@@ -4077,6 +4096,16 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	/* Where does the locomotive go next? */
 	StationID loco_dest = NextStationInOrders(v, v->cur_real_order_index + 1, station);
 
+	/* Repair groups whose saved orders point at a vehicle that is no longer next
+	 * to them (older versions lost track of a group when the group in front of
+	 * it was taken out in a yard): the group starts at the vehicle holding them. */
+	for (Train *u = v->Next(); u != NULL; u = u->Next()) {
+		if (u->drawer_orders == NULL) continue;
+		if (u->Previous()->index == u->drawer_neighbour) continue;
+		if (u->Next() != NULL && u->Next()->index == u->drawer_neighbour) continue;
+		u->drawer_neighbour = u->Previous()->index;
+	}
+
 	std::vector<TrainSegment> segments;
 	GetTrainSegments(v, segments);
 
@@ -4120,6 +4149,14 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	for (size_t i = 1; i < segments.size(); i++) {
 		if (!keep[i]) continue;
 		tail->SetNext(segments[i].first);
+		/* The vehicle in front of the group may have changed (a group between
+		 * them went to the depot): keep the group recognisable by pointing its
+		 * saved orders at its new neighbour, at the front of the group. */
+		Train *d = segments[i].drawer;
+		if (d != NULL) {
+			if (d != segments[i].first) MoveCoupledOrders(d, segments[i].first);
+			segments[i].first->drawer_neighbour = tail->index;
+		}
 		tail = segments[i].last;
 	}
 
