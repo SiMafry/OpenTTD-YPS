@@ -2859,6 +2859,16 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 	if (v != u) {
 		if (second_type == ODOF_OWN_ORDERS) {
 			bool restored = second_drawer != NULL && RestoreCoupledOrders(u, second_drawer);
+			if (!restored && second_drawer == NULL) {
+				/* Nothing saved right at the cut (wagons that lost their own
+				 * orders in older versions): take the route of the first wagon
+				 * group behind them, keeping that group's saved orders. */
+				for (Train *w = u; w != NULL; w = w->Next()) {
+					if (w->drawer_orders == NULL || !SavedOrdersHaveStation(w->drawer_orders)) continue;
+					restored = RestoreCoupledOrders(u, w, true, true);
+					break;
+				}
+			}
 			if (!restored) {
 				/* Nothing saved for this cut: just wait. */
 				CreateWaitForCoupleOrder(u);
@@ -4277,6 +4287,15 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	std::vector<TrainSegment> segments;
 	GetTrainSegments(v, segments);
 	if (RepairLostGroups(v, segments)) GetTrainSegments(v, segments);
+	/* Wagons behind a group boundary without saved orders of their own (lost
+	 * in older versions) go with the group next to them. */
+	for (size_t i = 1; i < segments.size(); i++) {
+		if (segments[i].drawer != NULL) continue;
+		Train *src = segments[i - 1].drawer;
+		if (src == NULL && i + 1 < segments.size()) src = segments[i + 1].drawer;
+		if (src == NULL || !SavedOrdersHaveStation(src->drawer_orders)) continue;
+		if (CopyCoupledOrders(src, segments[i].first, segments[i - 1].last)) segments[i].drawer = segments[i].first;
+	}
 
 	/* The part with the locomotive must be the front; it stays. */
 	size_t main = 0;
