@@ -6243,6 +6243,22 @@ static bool TrainLocoHandler(Train *v, bool mode)
 		if (HasBit(v->flags, VRF_YARD_IN_DEPOT)) return true;
 	}
 
+	/* Go to couple with a time limit: nothing to couple in time, go on with the next order. */
+	if (!mode && v->current_order.IsType(OT_GOTO_COUPLE) && v->current_order.GetCoupleMaxWait() > 0 &&
+			v->current_order_time >= (uint)v->current_order.GetCoupleMaxWait() * DAY_TICKS && v->GetNumOrders() > 1) {
+		if (!HasBit(v->flags, VRF_TRAIN_STUCK)) FreeTrainTrackReservation(v);
+		ClrBit(v->flags, VRF_TRAIN_STUCK);
+		v->wait_counter = 0;
+		VehicleOrderID next = v->cur_real_order_index + 1;
+		if (next >= v->GetNumOrders()) next = 0;
+		v->cur_implicit_order_index = v->cur_real_order_index = next;
+		v->UpdateRealOrderIndex();
+		v->current_order.Free();
+		ProcessOrders(v);
+		InvalidateVehicleOrder(v, VIWD_MODIFY_ORDERS);
+		SetWindowWidgetDirty(WC_VEHICLE_VIEW, v->index, WID_VV_START_STOP);
+	}
+
 	if (HasBit(v->flags, VRF_REVERSING) && v->cur_speed == 0) {
 		if (!mode) return true;
 		ReverseTrainDirection(v);

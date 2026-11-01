@@ -179,6 +179,8 @@ public:
 	inline OrderCoupleFlags GetCoupleLoad() const { return (OrderCoupleFlags)GB(this->flags, 0, 3); }
 	/** How many wagons are we taking */
 	inline uint8 GetNumCouple() const { return GB(this->decouple_flags, 1, 7); }
+	/** Go to couple: give up and go on after this many days without coupling (0: wait forever). @pre IsType(OT_GOTO_COUPLE) */
+	inline uint8 GetCoupleMaxWait() const { return GB(this->flags, 3, 5); }
 	/** Go to couple: only couple trains going to the same next station as we do. @pre IsType(OT_GOTO_COUPLE) */
 	inline bool GetCoupleSameDestination() const { return HasBit(this->decouple_flags, 0); }
 	/** Decouple: sort the train in a shunting yard instead of a simple cut. @pre IsType(OT_DECOUPLE) */
@@ -218,6 +220,7 @@ public:
 	inline void SetCoupleLoad(OrderCoupleFlags load_type) { SB(this->flags, 0, 3, load_type); }
 	/** Set how many units to take */
 	inline void SetNumCouple(uint8 value) { SB(this->decouple_flags, 1, 7, value); }
+	inline void SetCoupleMaxWait(uint8 days) { SB(this->flags, 3, 5, days); }
 	inline void SetCoupleSameDestination(bool value) { SB(this->decouple_flags, 0, 1, value ? 1 : 0); }
 	inline void SetDecoupleSort(bool value) { SB(this->decouple_flags, 0, 1, value ? 1 : 0); }
 	inline void SetDecoupleSortWait(bool value) { SB(this->flags, 3, 1, value ? 1 : 0); }

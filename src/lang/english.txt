@@ -3869,6 +3869,9 @@ STR_ORDER_REVERSE_PUSH                                          :Turn around (pu
 STR_ORDER_REVERSE_RUN_AROUND                                    :Turn around (locomotive runs around)
 STR_ORDER_COUPLE_SAME_DEST_BUTTON                               :{BLACK}Same destination
 STR_ORDER_COUPLE_SAME_DEST_TOOLTIP                              :{BLACK}Only couple a waiting train whose next station is the same as ours
+STR_ORDER_COUPLE_MAX_WAIT_BUTTON                                :{BLACK}Max. wait
+STR_ORDER_COUPLE_MAX_WAIT_TOOLTIP                               :{BLACK}Give up coupling after this many days and go on with the next order (0: wait as long as needed)
+STR_ORDER_COUPLE_MAX_WAIT_CAPT                                  :{WHITE}Wait at most this many days for a train to couple (0: no limit, max. 31)
 STR_ORDER_COUPLE_SAME_DEST                                      : (same destination)
 STR_ORDER_DECOUPLE_SORT_BUTTON                                  :{BLACK}Sort
 STR_ORDER_DECOUPLE_SORT_TOOLTIP                                 :{BLACK}Shunting yard: wagon groups that do not go where the locomotive goes are left in the depot next to the station, waiting groups for the locomotive's destination are added
@@ -3938,6 +3941,8 @@ STR_ORDER_DECOUPLE_DETAILS                                      :[Decouple and k
 STR_ORDER_DECOUPLE_DETAILS_AUTO                                 :[Decouple and keep {COMMA}(auto) units] First part {STRING} Second part {STRING}
 
 STR_ORDER_COUPLE_UNITS                                          :(with {COMMA} units)
+STR_ORDER_COUPLE_MAX_WAIT                                       :(max. {COMMA} day{P "" s})
+STR_ORDER_COUPLE_UNITS_MAX_WAIT                                 :(with {COMMA} units, max. {COMMA} day{P "" s})
 
 STR_ORDER_DECOUPLE_KEEP_ORDERS                                  :(Keep orders)
 STR_ORDER_DECOUPLE_KEEP_ORDERS_NO_LOAD                          :(Keep orders without loading/unloading)

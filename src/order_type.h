@@ -199,6 +199,7 @@ enum ModifyOrderFlags {
 	MOF_SECOND_ORDERS,   ///< Change orders of second part of train after decoupling.
 	MOF_COUPLE_SAME_DEST,///< Toggle: couple only trains going to the same next station.
 	MOF_DECOUPLE_SORT,   ///< Toggle: sort the train in a shunting yard.
+	MOF_COUPLE_MAX_WAIT, ///< Go to couple: give up after this many days.
 	MOF_END
 };
 template <> struct EnumPropsT<ModifyOrderFlags> : MakeEnumPropsT<ModifyOrderFlags, byte, MOF_NON_STOP, MOF_END, MOF_END, 8> {};

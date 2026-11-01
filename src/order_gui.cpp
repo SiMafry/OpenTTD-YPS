@@ -387,9 +387,17 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 				SetDParam(2, CargoSpec::Get(order->GetCoupleCargoType())->name);
 			}
 			uint num_d = order->GetNumDecouple();
-			if (num_d > 0) {
+			uint max_wait = order->GetCoupleMaxWait();
+			if (num_d > 0 && max_wait > 0) {
+				SetDParam(5, STR_ORDER_COUPLE_UNITS_MAX_WAIT);
+				SetDParam(6, num_d);
+				SetDParam(7, max_wait);
+			} else if (num_d > 0) {
 				SetDParam(5, STR_ORDER_COUPLE_UNITS);
 				SetDParam(6, num_d);
+			} else if (max_wait > 0) {
+				SetDParam(5, STR_ORDER_COUPLE_MAX_WAIT);
+				SetDParam(6, max_wait);
 			}
 			if (order->GetCoupleSameDestination()) SetDParam(8, STR_ORDER_COUPLE_SAME_DEST);
 			break;
@@ -591,6 +599,7 @@ private:
 
 	int selected_order;
 	VehicleOrderID order_over;         ///< Order over which another order is dragged, \c INVALID_VEH_ORDER_ID if none.
+	int query_widget;                  ///< Widget whose value query is open.
 	OrderPlaceObjectState goto_type;
 	const Vehicle *vehicle; ///< Vehicle owning the orders being displayed and manipulated.
 	Scrollbar *vscroll;
@@ -926,6 +935,7 @@ public:
 
 		this->selected_order = -1;
 		this->order_over = INVALID_VEH_ORDER_ID;
+		this->query_widget = -1;
 		this->goto_type = OPOS_NONE;
 		this->owner = v->owner;
 
@@ -1538,9 +1548,19 @@ public:
 				break;
 			}
 
+			case WID_O_COUPLE_MAX_WAIT: {
+				const Order *order = this->vehicle->GetOrder(this->OrderGetSel());
+				if (order == NULL || !order->IsType(OT_GOTO_COUPLE)) break;
+				SetDParam(0, order->GetCoupleMaxWait());
+				this->query_widget = WID_O_COUPLE_MAX_WAIT;
+				ShowQueryString(STR_JUST_INT, STR_ORDER_COUPLE_MAX_WAIT_CAPT, 3, this, CS_NUMERAL, QSF_NONE);
+				break;
+			}
+
 			case WID_O_COUPLE_VALUE: {
 				const Order *order = this->vehicle->GetOrder(this->OrderGetSel());
 				uint value = order->GetNumCouple();
+				this->query_widget = WID_O_COUPLE_VALUE;
 				SetDParam(0, value);
 				ShowQueryString(STR_JUST_INT, STR_ORDER_DECOUPLE_VALUE_CAPT, 4, this, CS_NUMERAL, QSF_NONE);
 				break;
@@ -1574,10 +1594,15 @@ public:
 
 	virtual void OnQueryTextFinished(char *str)
 	{
+		int query_widget = this->query_widget;
+		this->query_widget = -1;
 		if (!StrEmpty(str)) {
 			VehicleOrderID sel = this->OrderGetSel();
 			uint value = atoi(str);
-			if (this->vehicle->GetOrder(sel)->IsType(OT_CONDITIONAL)) {
+			if (this->vehicle->GetOrder(sel) == NULL) return;
+			if (query_widget == WID_O_COUPLE_MAX_WAIT && this->vehicle->GetOrder(sel)->IsType(OT_GOTO_COUPLE)) {
+				DoCommandP(this->vehicle->tile, this->vehicle->index + (sel << 20), MOF_COUPLE_MAX_WAIT | Clamp(value, 0, 31) << 8, CMD_MODIFY_ORDER | CMD_MSG(STR_ERROR_CAN_T_MODIFY_THIS_ORDER));
+			} else if (this->vehicle->GetOrder(sel)->IsType(OT_CONDITIONAL)) {
 				switch (this->vehicle->GetOrder(sel)->GetConditionVariable()) {
 					case OCV_MAX_SPEED:
 						value = ConvertDisplaySpeedToSpeed(value);
@@ -1862,6 +1887,8 @@ static const NWidgetPart _nested_orders_train_widgets[] = {
 															SetDataTip(STR_ORDERS_COUPLE_VALUE_BUTTON, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
 				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_COUPLE_SAME_DEST), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDER_COUPLE_SAME_DEST_BUTTON, STR_ORDER_COUPLE_SAME_DEST_TOOLTIP), SetResize(1, 0),
+				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_COUPLE_MAX_WAIT), SetMinimalSize(93, 12), SetFill(1, 0),
+															SetDataTip(STR_ORDER_COUPLE_MAX_WAIT_BUTTON, STR_ORDER_COUPLE_MAX_WAIT_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 			NWidget(NWID_HORIZONTAL, NC_EQUALSIZE),
 				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_ORDERS_FIRST), SetMinimalSize(93, 12), SetFill(1, 0),

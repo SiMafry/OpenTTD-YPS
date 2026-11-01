@@ -48,6 +48,7 @@ enum OrderWidgets {
 	WID_O_ORDERS_SECOND,             ///< Select orders for second part of decoupled train
 	WID_O_COUPLE_SAME_DEST,          ///< Toggle: couple only trains going to the same next station
 	WID_O_DECOUPLE_SORT,             ///< Toggle: sort the train in a shunting yard
+	WID_O_COUPLE_MAX_WAIT,           ///< Go to couple: give up after this many days
 };
 
 #endif /* WIDGETS_ORDER_WIDGET_H */

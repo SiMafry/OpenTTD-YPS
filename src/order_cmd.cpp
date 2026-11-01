@@ -1415,7 +1415,7 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 			break;
 			
 		case OT_GOTO_COUPLE:
-			if (mof != MOF_COUPLE_LOAD && mof != MOF_COUPLE_CARGO && mof != MOF_COUPLE_VALUE && mof != MOF_COUPLE_SAME_DEST) return CMD_ERROR;
+			if (mof != MOF_COUPLE_LOAD && mof != MOF_COUPLE_CARGO && mof != MOF_COUPLE_VALUE && mof != MOF_COUPLE_SAME_DEST && mof != MOF_COUPLE_MAX_WAIT) return CMD_ERROR;
 			break;
 
 		case OT_DECOUPLE:
@@ -1527,6 +1527,10 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 		case MOF_COUPLE_SAME_DEST:
 			if (data > 1) return CMD_ERROR;
+			break;
+
+		case MOF_COUPLE_MAX_WAIT:
+			if (data > 31) return CMD_ERROR;
 			break;
 
 		case MOF_DECOUPLE_SORT: // 0: no, 1: sort, 2: sort and wait for load
@@ -1658,6 +1662,10 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 			case MOF_COUPLE_SAME_DEST:
 				order->SetCoupleSameDestination(data != 0);
+				break;
+
+			case MOF_COUPLE_MAX_WAIT:
+				order->SetCoupleMaxWait(data);
 				break;
 
 			case MOF_DECOUPLE_SORT:
@@ -2436,7 +2444,10 @@ bool ProcessOrders(Vehicle *v)
 	}
 
 	/* Otherwise set it, and determine the destination tile. */
+	bool was_couple = v->current_order.IsType(OT_GOTO_COUPLE);
 	v->current_order = *order;
+	/* Go to couple with a time limit: count from now. */
+	if (order->IsType(OT_GOTO_COUPLE) && !was_couple) v->current_order_time = 0;
 
 	InvalidateVehicleOrder(v, VIWD_MODIFY_ORDERS);
 	switch (v->type) {

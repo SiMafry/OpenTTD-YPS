@@ -3922,6 +3922,11 @@ STR_ORDERS_DECOUPLE_OWN_ORDERS                                  :Vlastní přík
 STR_ORDER_DECOUPLE_OWN_ORDERS                                   :(Vlastní příkazy)
 STR_ORDER_COUPLE_SAME_DEST_BUTTON                               :{BLACK}Stejný cíl
 STR_ORDER_COUPLE_SAME_DEST_TOOLTIP                              :{BLACK}Připojit jen čekající vlak, jehož další stanice je stejná jako naše
+STR_ORDER_COUPLE_MAX_WAIT_BUTTON                                :{BLACK}Max. čekání
+STR_ORDER_COUPLE_MAX_WAIT_TOOLTIP                               :{BLACK}Když se do tolika dní nepřipojí žádný vlak, pokračovat dalším příkazem (0: čekat bez omezení)
+STR_ORDER_COUPLE_MAX_WAIT_CAPT                                  :{WHITE}Nejdéle čekat na připojení dní (0: bez omezení, max. 31)
+STR_ORDER_COUPLE_MAX_WAIT                                       :(max. {COMMA} {P den dny dní})
+STR_ORDER_COUPLE_UNITS_MAX_WAIT                                 :(s {COMMA} jednotkami, max. {COMMA} {P den dny dní})
 STR_ORDER_COUPLE_SAME_DEST                                      : (stejný cíl)
 STR_ORDER_DECOUPLE_SORT_BUTTON                                  :{BLACK}Rozřadit
 STR_ORDER_DECOUPLE_SORT_TOOLTIP                                 :{BLACK}Seřaďovací stanice: skupiny vozů, které nejedou tam co lokomotiva, se odstaví do depa vedle stanice a čekající skupiny pro cíl lokomotivy se připojí
