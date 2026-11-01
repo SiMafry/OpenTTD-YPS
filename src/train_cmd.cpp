@@ -62,6 +62,7 @@ static Train *UnitHead(const Train *x);
 static Train *UnitTail(const Train *x);
 static bool UnitHas(const Train *x, VehicleID id);
 static Train *UnitDrawerTowards(const Train *x, const Train *other);
+
 static bool SavedOrdersHaveStation(const Order *first);
 static void MoveCoupledOrders(Train *from, Train *to);
 static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
@@ -2527,6 +2528,42 @@ static void MoveCoupledOrders(Train *from, Train *to)
 }
 
 /**
+ * Copy the saved own orders ("drawer") of a wagon group to another vehicle of
+ * the group; the original stays (it may mark another coupling place).
+ * @param from Vehicle holding them.
+ * @param to Vehicle to get a copy.
+ * @param neighbour The vehicle \a to is coupled to.
+ * @return false if the copy could not be made.
+ */
+static bool CopyCoupledOrders(const Train *from, Train *to, const Train *neighbour)
+{
+	int num = 0;
+	for (const Order *o = from->drawer_orders; o != NULL; o = o->next) num++;
+	if (num == 0 || !Order::CanAllocateItem(num)) return false;
+	Order *first = NULL;
+	Order *last = NULL;
+	for (const Order *o = from->drawer_orders; o != NULL; o = o->next) {
+		Order *copy = new Order();
+		copy->AssignOrder(*o);
+		copy->next = NULL;
+		if (last == NULL) first = copy; else last->next = copy;
+		last = copy;
+	}
+	VehicleID share = from->drawer_share_with;
+	VehicleOrderID real = from->drawer_real_index;
+	VehicleOrderID impl = from->drawer_impl_index;
+	GroupID group = from->drawer_group;
+	to->ClearCoupledOrders(); // if to == from, the copy is all that is left
+	to->drawer_orders = first;
+	to->drawer_neighbour = neighbour->index;
+	to->drawer_share_with = share;
+	to->drawer_real_index = real;
+	to->drawer_impl_index = impl;
+	to->drawer_group = group;
+	return true;
+}
+
+/**
  * When a waiting train is coupled to another one, keep a copy of its own orders
  * ("drawer") on its first vehicle, so it can get them back when it is decoupled
  * at the same place later (decouple option "Own orders").
@@ -2542,8 +2579,8 @@ static void SaveCoupledOrders(Train *part, const Train *neighbour)
 		for (Train *w = part; w != NULL; w = w->Next()) {
 			if (w != part && IsCouplingPoint(w->Previous(), w)) break; // the next group starts here
 			if (w->drawer_orders != NULL && UnitTail(w)->Next() != NULL && UnitHas(UnitTail(w)->Next(), w->drawer_neighbour) && SavedOrdersHaveStation(w->drawer_orders)) {
-				MoveCoupledOrders(w, part);
-				part->drawer_neighbour = neighbour->index;
+				/* Copy them: the original still marks where the next group starts. */
+				if (!CopyCoupledOrders(w, part, neighbour)) break;
 				for (Train *x = part->Next(); x != NULL; x = x->Next()) {
 					if (x->drawer_orders != NULL && !IsCouplingMarker(x)) x->ClearCoupledOrders();
 				}
@@ -2688,7 +2725,7 @@ static Train *FindCoupledOrders(Train *inner_end, const Train *other_end)
  * @param drawer Vehicle of the part holding the saved orders.
  * @return true if the orders were restored.
  */
-static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true)
+static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true, bool keep_drawer = false)
 {
 	int num = 0;
 	for (const Order *o = drawer->drawer_orders; o != NULL; o = o->next) num++;
@@ -2731,7 +2768,7 @@ static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true)
 		GroupStatistics::CountVehicle(t, 1);
 	}
 
-	drawer->ClearCoupledOrders();
+	if (!keep_drawer) drawer->ClearCoupledOrders();
 	InvalidateVehicleOrder(t, VIWD_REMOVE_ALL_ORDERS);
 	return true;
 }
@@ -3971,10 +4008,8 @@ static void RepairWaitingGroup(Train *g)
 	for (Train *w = g; w != NULL; w = w->Next()) {
 		if (w != g && IsCouplingPoint(w->Previous(), w) && UnitDrawerTowards(w->Previous(), w) == NULL) break; // another group
 		if (w->drawer_orders == NULL || !SavedOrdersHaveStation(w->drawer_orders)) continue;
-		if (!RestoreCoupledOrders(g, w, false)) return;
-		for (Train *x = g; x != NULL; x = x->Next()) {
-			if (x->drawer_orders != NULL && !IsCouplingMarker(x)) x->ClearCoupledOrders();
-		}
+		/* Keep the saved orders: they may still mark where the next group starts. */
+		if (!RestoreCoupledOrders(g, w, false, IsCouplingMarker(w))) return;
 		g->current_order.AssignOrder(*g->GetOrder(g->cur_real_order_index));
 		SetWindowDirty(WC_VEHICLE_VIEW, g->index);
 		return;
@@ -4308,9 +4343,12 @@ static Train *SortTrainInYard(Train *v, StationID station)
 		 * them went to the depot): keep the group recognisable by pointing its
 		 * saved orders at its new neighbour, at the front of the group. */
 		Train *d = segments[i].drawer;
-		if (d != NULL) {
-			if (d != segments[i].first) MoveCoupledOrders(d, segments[i].first);
-			segments[i].first->drawer_neighbour = tail->index;
+		if (d == segments[i].first) {
+			d->drawer_neighbour = tail->index;
+		} else if (d != NULL) {
+			/* Saved at its rear end, where they also mark the start of the next
+			 * group: keep them there and put a copy at the front. */
+			CopyCoupledOrders(d, segments[i].first, tail);
 		}
 		tail = segments[i].last;
 	}
