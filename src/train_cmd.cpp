@@ -58,6 +58,10 @@ static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, Sta
 static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
 static bool IsCouplingMarker(const Train *u);
 static bool IsCouplingPoint(const Train *a, const Train *b);
+static Train *UnitHead(const Train *x);
+static Train *UnitTail(const Train *x);
+static bool UnitHas(const Train *x, VehicleID id);
+static Train *UnitDrawerTowards(const Train *x, const Train *other);
 static bool SavedOrdersHaveStation(const Order *first);
 static void MoveCoupledOrders(Train *from, Train *to);
 static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
@@ -2537,7 +2541,7 @@ static void SaveCoupledOrders(Train *part, const Train *neighbour)
 	if (part->orders.list == NULL || !SavedOrdersHaveStation(part->GetFirstOrder())) {
 		for (Train *w = part; w != NULL; w = w->Next()) {
 			if (w != part && IsCouplingPoint(w->Previous(), w)) break; // the next group starts here
-			if (w->drawer_orders != NULL && w->Next() != NULL && w->Next()->index == w->drawer_neighbour && SavedOrdersHaveStation(w->drawer_orders)) {
+			if (w->drawer_orders != NULL && UnitTail(w)->Next() != NULL && UnitHas(UnitTail(w)->Next(), w->drawer_neighbour) && SavedOrdersHaveStation(w->drawer_orders)) {
 				MoveCoupledOrders(w, part);
 				part->drawer_neighbour = neighbour->index;
 				for (Train *x = part->Next(); x != NULL; x = x->Next()) {
@@ -2627,6 +2631,44 @@ static bool IsSavedOrderDestinationValid(const Order *o, Owner owner)
 	}
 }
 
+/* Saved orders mark a coupling place by the vehicle they were coupled to.
+ * Articulated vehicles can swap the roles of their parts when the train is
+ * turned, so the comparison is made by whole vehicles ("units"). */
+
+/** First part of the articulated vehicle a vehicle belongs to. */
+static Train *UnitHead(const Train *x)
+{
+	while (x->IsArticulatedPart() && x->Previous() != NULL) x = x->Previous();
+	return const_cast<Train *>(x);
+}
+
+/** Last part of the articulated vehicle a vehicle belongs to. */
+static Train *UnitTail(const Train *x)
+{
+	while (x->Next() != NULL && x->Next()->IsArticulatedPart()) x = x->Next();
+	return const_cast<Train *>(x);
+}
+
+/** Is a vehicle (by index) part of the articulated vehicle of \a x? */
+static bool UnitHas(const Train *x, VehicleID id)
+{
+	for (const Train *u = UnitHead(x); u != NULL; u = u->Next()) {
+		if (u->index == id) return true;
+		if (u->Next() == NULL || !u->Next()->IsArticulatedPart()) break;
+	}
+	return false;
+}
+
+/** The vehicle of the unit of \a x whose saved orders point at the unit of \a other, or NULL. */
+static Train *UnitDrawerTowards(const Train *x, const Train *other)
+{
+	for (Train *u = UnitHead(x); u != NULL; u = u->Next()) {
+		if (u->drawer_orders != NULL && UnitHas(other, u->drawer_neighbour)) return u;
+		if (u->Next() == NULL || !u->Next()->IsArticulatedPart()) break;
+	}
+	return NULL;
+}
+
 /**
  * Find the vehicle that holds the saved own orders of a part of a just decoupled train.
  * The part only gets its orders back when the train was cut exactly where the
@@ -2637,9 +2679,7 @@ static bool IsSavedOrderDestinationValid(const Order *o, Owner owner)
  */
 static Train *FindCoupledOrders(Train *inner_end, const Train *other_end)
 {
-	if (inner_end->drawer_orders == NULL) return NULL;
-	if (inner_end->drawer_neighbour != other_end->index) return NULL;
-	return inner_end;
+	return UnitDrawerTowards(inner_end, other_end);
 }
 
 /**
@@ -3756,8 +3796,7 @@ static bool IsCouplingPoint(const Train *a, const Train *b)
 {
 	/* Never inside an articulated vehicle. */
 	if (b->IsArticulatedPart()) return false;
-	return (b->drawer_orders != NULL && b->drawer_neighbour == a->index) ||
-			(a->drawer_orders != NULL && a->drawer_neighbour == b->index);
+	return UnitDrawerTowards(b, a) != NULL || UnitDrawerTowards(a, b) != NULL;
 }
 
 /**
@@ -3785,8 +3824,8 @@ static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
 	/* Find the saved orders of each group: at its start pointing back, or at its end pointing forward. */
 	for (size_t i = 0; i < segments.size(); i++) {
 		TrainSegment &s = segments[i];
-		Train *back = (i > 0 && s.first->drawer_orders != NULL && s.first->drawer_neighbour == segments[i - 1].last->index) ? s.first : NULL;
-		Train *fwd = (i + 1 < segments.size() && s.last->drawer_orders != NULL && s.last->drawer_neighbour == segments[i + 1].first->index) ? s.last : NULL;
+		Train *back = (i > 0) ? UnitDrawerTowards(s.first, segments[i - 1].last) : NULL;
+		Train *fwd = (i + 1 < segments.size()) ? UnitDrawerTowards(s.last, segments[i + 1].first) : NULL;
 		s.drawer = back != NULL ? back : fwd;
 		/* Both: prefer the one with a real route over a bare 'wait for couple'. */
 		if (back != NULL && fwd != NULL && fwd != back && !SavedOrdersHaveStation(back->drawer_orders) && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
@@ -3806,8 +3845,9 @@ static bool SavedOrdersHaveStation(const Order *first)
 static bool IsCouplingMarker(const Train *u)
 {
 	if (u->drawer_orders == NULL) return false;
-	return (u->Previous() != NULL && !u->IsArticulatedPart() && u->Previous()->index == u->drawer_neighbour) ||
-			(u->Next() != NULL && !u->Next()->IsArticulatedPart() && u->Next()->index == u->drawer_neighbour);
+	const Train *prev = UnitHead(u)->Previous();
+	const Train *next = UnitTail(u)->Next();
+	return (prev != NULL && UnitHas(prev, u->drawer_neighbour)) || (next != NULL && UnitHas(next, u->drawer_neighbour));
 }
 
 /**
@@ -3929,7 +3969,7 @@ static void RepairWaitingGroup(Train *g)
 {
 	if (g->orders.list != NULL && SavedOrdersHaveStation(g->GetFirstOrder())) return;
 	for (Train *w = g; w != NULL; w = w->Next()) {
-		if (w != g && IsCouplingPoint(w->Previous(), w) && !(w->Previous()->drawer_orders != NULL && w->Previous()->drawer_neighbour == w->index)) break; // another group
+		if (w != g && IsCouplingPoint(w->Previous(), w) && UnitDrawerTowards(w->Previous(), w) == NULL) break; // another group
 		if (w->drawer_orders == NULL || !SavedOrdersHaveStation(w->drawer_orders)) continue;
 		if (!RestoreCoupledOrders(g, w, false)) return;
 		for (Train *x = g; x != NULL; x = x->Next()) {
@@ -4235,6 +4275,27 @@ static Train *SortTrainInYard(Train *v, StationID station)
 		d->drawer_impl_index = d->drawer_real_index;
 		StationID dest = NextStationInSavedOrders(d->drawer_orders, d->drawer_real_index, station);
 		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest);
+	}
+
+	/* Maximum length set in the order: leave groups (from the back) in the
+	 * yard while the train would be longer. Unknown wagons always stay. */
+	const Order *yard_order = v->GetOrder(v->cur_real_order_index + 1);
+	uint max_units = (yard_order != NULL && yard_order->IsType(OT_DECOUPLE) && yard_order->GetDecoupleSort()) ? yard_order->GetNumDecouple() : 0;
+	if (max_units > 0) {
+		std::vector<uint> units(segments.size(), 0);
+		uint total = 0;
+		for (size_t i = 0; i < segments.size(); i++) {
+			for (Train *u = segments[i].first; ; u = u->Next()) {
+				if (!u->IsArticulatedPart()) units[i]++;
+				if (u == segments[i].last) break;
+			}
+			if (keep[i]) total += units[i];
+		}
+		for (size_t i = segments.size() - 1; i > 0 && total > max_units; i--) {
+			if (!keep[i] || segments[i].drawer == NULL) continue;
+			keep[i] = false;
+			total -= units[i];
+		}
 	}
 	for (size_t i = 0; i < segments.size(); i++) segments[i].last->SetNext(NULL);
 
