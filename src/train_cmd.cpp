@@ -6243,8 +6243,15 @@ static bool TrainLocoHandler(Train *v, bool mode)
 		if (HasBit(v->flags, VRF_YARD_IN_DEPOT)) return true;
 	}
 
-	/* Go to couple with a time limit: nothing to couple in time, go on with the next order. */
+	/* Go to couple with a time limit: the time only runs while the train waits
+	 * without a train to couple to ('stuck'). While it drives (to a waiting
+	 * train or anywhere else) the time is reset, so when it loses its target
+	 * it starts again from zero. Nothing to couple in time: next order. */
 	if (!mode && v->current_order.IsType(OT_GOTO_COUPLE) && v->current_order.GetCoupleMaxWait() > 0 &&
+			!HasBit(v->flags, VRF_TRAIN_STUCK)) {
+		v->current_order_time = 0;
+	}
+	if (!mode && v->current_order.IsType(OT_GOTO_COUPLE) && v->current_order.GetCoupleMaxWait() > 0 && HasBit(v->flags, VRF_TRAIN_STUCK) &&
 			v->current_order_time >= (uint)v->current_order.GetCoupleMaxWait() * DAY_TICKS && v->GetNumOrders() > 1) {
 		if (!HasBit(v->flags, VRF_TRAIN_STUCK)) FreeTrainTrackReservation(v);
 		ClrBit(v->flags, VRF_TRAIN_STUCK);
