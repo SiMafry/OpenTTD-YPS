@@ -2436,10 +2436,24 @@ uint GetDecoupleVehicleAuto(Train *v)
 	return 1;
 }
 
+/**
+ * A decouple order with a fixed number of units, but the train is not longer
+ * than that: there is nothing to decouple (e.g. the locomotives arriving alone).
+ */
+static bool NothingToDecouple(Train *v)
+{
+	const Order *decouple_order = v->GetOrder(v->cur_real_order_index + 1);
+	if (decouple_order == NULL || !decouple_order->IsType(OT_DECOUPLE)) return false;
+	uint num_decouple = decouple_order->GetNumDecouple();
+	return num_decouple > 0 && CountVehiclesInVehicles(v) <= num_decouple;
+}
+
 static Train *GetDecoupleVehicle(Train *v)
 {
 	Order *decouple_order = v->orders.list->GetOrderAt(v->cur_real_order_index + 1);
 	uint num_decouple = decouple_order->GetNumDecouple();
+	/* Keep that many units: a train that is not longer stays whole. */
+	if (num_decouple > 0 && CountVehiclesInVehicles(v) <= num_decouple) return NULL;
 	if (num_decouple == 0) num_decouple = GetDecoupleVehicleAuto(v);
 	Train *ret = v->GetNextVehicle();
 	bool multihead_front = v->IsMultiheaded();
@@ -4788,8 +4802,12 @@ static void TrainEnterStation(Train *v, StationID station)
 		v = SortTrainInYard(v, station);
 		load_trains = DECOUPLE_LOAD_FIRST;
 	} else if (v->current_order.GetDestination() == station && v->current_order.GetDecouple() == ODF_DECOUPLE) {
+		bool nothing = NothingToDecouple(v);
 		u = DecoupleTrain(v);
-		if (u == v) {
+		if (u == v && nothing) {
+			/* Nothing to decouple: just stop here as usual. */
+			load_trains = DECOUPLE_LOAD_FIRST;
+		} else if (u == v) {
 			/* Decoupling failed (e.g. the train is too short or does not fit
 			 * the platform). Keep the orders and just stop here; the decouple
 			 * order is skipped when leaving. (Before, the orders were still
