@@ -2586,10 +2586,12 @@ static bool CopyCoupledOrders(const Train *from, Train *to, const Train *neighbo
  */
 static void SaveCoupledOrders(Train *part, const Train *neighbour)
 {
-	/* A part that only 'waits for couple' because its own orders were lost
-	 * (e.g. decoupled where nothing was saved) may still carry its real
-	 * orders from an earlier coupling at its other end: use those. */
-	if (part->orders.list == NULL || !SavedOrdersHaveStation(part->GetFirstOrder())) {
+	/* The front group of the part may carry its own saved orders at its other
+	 * end (where they mark the next group). Those are its real route: the
+	 * orders of the part as a whole may belong to another group of it (the
+	 * one that was at the cut when the part was left), or be only a bare
+	 * 'wait for couple'. */
+	{
 		for (Train *w = part; w != NULL; w = w->Next()) {
 			if (w != part && IsCouplingPoint(w->Previous(), w)) break; // the next group starts here
 			if (w->drawer_orders != NULL && UnitTail(w)->Next() != NULL && UnitHas(UnitTail(w)->Next(), w->drawer_neighbour) && SavedOrdersHaveStation(w->drawer_orders)) {
@@ -3888,8 +3890,10 @@ static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
 		Train *back = (i > 0) ? UnitDrawerTowards(s.first, segments[i - 1].last) : NULL;
 		Train *fwd = (i + 1 < segments.size()) ? UnitDrawerTowards(s.last, segments[i + 1].first) : NULL;
 		s.drawer = back != NULL ? back : fwd;
-		/* Both: prefer the one with a real route over a bare 'wait for couple'. */
-		if (back != NULL && fwd != NULL && fwd != back && !SavedOrdersHaveStation(back->drawer_orders) && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
+		/* Both: the one towards the next group is the group's own (older
+		 * versions could save the orders of a whole multi-group part, i.e.
+		 * of another group, at the front); a bare 'wait for couple' never wins. */
+		if (back != NULL && fwd != NULL && fwd != back && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
 	}
 }
 
