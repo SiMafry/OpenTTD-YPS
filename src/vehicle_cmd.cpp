@@ -777,13 +777,32 @@ static void CloneVehicleName(const Vehicle *src, Vehicle *dst)
  * @param text unused
  * @return the cost of this operation or an error
  */
+/**
+ * The engine to build for one (possibly articulated) vehicle of a train being
+ * cloned. A turned train can have the parts of an articulated vehicle in the
+ * other order, so its first part may be a type that cannot be bought alone.
+ */
+static EngineID GetCloneEngine(const Vehicle *v)
+{
+	if (v->type != VEH_TRAIN || IsEngineBuildable(v->engine_type, v->type, v->owner)) return v->engine_type;
+	for (const Vehicle *u = v->GetNextArticulatedPart(); u != NULL; u = u->GetNextArticulatedPart()) {
+		if (IsEngineBuildable(u->engine_type, v->type, v->owner)) return u->engine_type;
+		if (!u->HasArticulatedPart()) break;
+	}
+	return v->engine_type;
+}
+
 CommandCost CmdCloneVehicle(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	CommandCost total_cost(EXPENSES_NEW_VEHICLES);
 
 	Vehicle *v = Vehicle::GetIfValid(p1);
+	/* A wagon of a train clicked: clone the whole train. */
+	if (v != NULL && v->type == VEH_TRAIN && !v->IsPrimaryVehicle() && v->First()->IsPrimaryVehicle()) v = v->First();
 	if (v == NULL || !v->IsPrimaryVehicle()) return CMD_ERROR;
 	Vehicle *v_front = v;
+	/* A train of wagons only (e.g. a decoupled wagon group): clone it too (sigiex). */
+	bool wagon_train = v->type == VEH_TRAIN && Train::From(v)->IsFrontWagon();
 	Vehicle *w = NULL;
 	Vehicle *w_front = NULL;
 	Vehicle *w_rear = NULL;
@@ -799,7 +818,7 @@ CommandCost CmdCloneVehicle(TileIndex tile, DoCommandFlag flags, uint32 p1, uint
 	CommandCost ret = CheckOwnership(v->owner);
 	if (ret.Failed()) return ret;
 
-	if (v->type == VEH_TRAIN && (!v->IsFrontEngine() || Train::From(v)->crash_anim_pos >= 4400)) return CMD_ERROR;
+	if (v->type == VEH_TRAIN && ((!v->IsFrontEngine() && !wagon_train) || Train::From(v)->crash_anim_pos >= 4400)) return CMD_ERROR;
 
 	/* check that we can allocate enough vehicles */
 	if (!(flags & DC_EXEC)) {
@@ -830,7 +849,7 @@ CommandCost CmdCloneVehicle(TileIndex tile, DoCommandFlag flags, uint32 p1, uint
 		DoCommandFlag build_flags = flags;
 		if ((flags & DC_EXEC) && !v->IsPrimaryVehicle()) build_flags |= DC_AUTOREPLACE;
 
-		CommandCost cost = DoCommand(tile, v->engine_type | (1 << 16), 0, build_flags, GetCmdBuildVeh(v));
+		CommandCost cost = DoCommand(tile, GetCloneEngine(v) | (1 << 16), 0, build_flags, GetCmdBuildVeh(v));
 
 		if (cost.Failed()) {
 			/* Can't build a part, then sell the stuff we already made; clear up the mess */
@@ -847,7 +866,12 @@ CommandCost CmdCloneVehicle(TileIndex tile, DoCommandFlag flags, uint32 p1, uint
 				for (Train *z = Train::From(w); z != NULL; z = z->Next()) SetBit(z->flags, VRF_REVERSE_DIRECTION);
 			}
 
-			if (v->type == VEH_TRAIN && !v->IsFrontEngine()) {
+			if (wagon_train && v == v_front) {
+				/* The first wagon of a wagon train: it may have been put behind
+				 * other free wagons in the depot; give it a line of its own. */
+				if (w->First() != w) DoCommand(0, w->index, INVALID_VEHICLE, flags, CMD_MOVE_RAIL_VEHICLE);
+				w_front = w;
+			} else if (v->type == VEH_TRAIN && !v->IsFrontEngine()) {
 				/* this s a train car
 				 * add this unit to the end of the train */
 				CommandCost result = DoCommand(0, w->index | 1 << 20, w_rear->index, flags, CMD_MOVE_RAIL_VEHICLE);
@@ -868,6 +892,12 @@ CommandCost CmdCloneVehicle(TileIndex tile, DoCommandFlag flags, uint32 p1, uint
 			w_rear = w; // trains needs to know the last car in the train, so they can add more in next loop
 		}
 	} while (v->type == VEH_TRAIN && (v = v->GetNextVehicle()) != NULL);
+
+	if ((flags & DC_EXEC) && wagon_train) {
+		/* Make the new wagons a train of their own, standing in the depot. */
+		extern void MakeClonedWagonTrain(Train *f);
+		MakeClonedWagonTrain(Train::From(w_front));
+	}
 
 	if ((flags & DC_EXEC) && v_front->type == VEH_TRAIN) {
 		/* for trains this needs to be the front engine due to the callback function */
@@ -891,6 +921,46 @@ CommandCost CmdCloneVehicle(TileIndex tile, DoCommandFlag flags, uint32 p1, uint
 	 * loop over real vehicles first, and then the articulated parts of those
 	 * vehicles in a different loop. */
 	do {
+		if ((flags & DC_EXEC) && v->type == VEH_TRAIN) {
+			/* Refit part by part; parts of the original are matched by type,
+			 * as a turned articulated vehicle has them in the other order. */
+			assert(w != NULL);
+			const Vehicle *vparts[16];
+			bool used[16];
+			uint nparts = 0;
+			for (const Vehicle *x = v; x != NULL && nparts < lengthof(vparts); x = x->GetNextArticulatedPart()) {
+				vparts[nparts] = x;
+				used[nparts] = false;
+				nparts++;
+				if (!x->HasArticulatedPart()) break;
+			}
+			uint idx = 0;
+			for (Vehicle *x = w; x != NULL; idx++) {
+				const Vehicle *src = NULL;
+				for (uint k = 0; k < nparts; k++) {
+					if (!used[k] && vparts[k]->engine_type == x->engine_type) {
+						src = vparts[k];
+						used[k] = true;
+						break;
+					}
+				}
+				if (src == NULL && idx < nparts) src = vparts[idx];
+				if (src != NULL) {
+					byte subtype = GetBestFittingSubType(src, x, src->cargo_type);
+					if (x->cargo_type != src->cargo_type || x->cargo_subtype != subtype) {
+						CommandCost cost = DoCommand(0, x->index, src->cargo_type | 1U << 7 | (subtype << 8), flags, GetCmdRefitVeh(src));
+						if (cost.Succeeded()) total_cost.AddCost(cost);
+					}
+				}
+				if (x->HasArticulatedPart()) {
+					x = x->GetNextArticulatedPart();
+				} else {
+					break;
+				}
+			}
+			w = w->GetNextVehicle();
+			continue;
+		}
 		do {
 			if (flags & DC_EXEC) {
 				assert(w != NULL);

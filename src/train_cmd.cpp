@@ -3969,6 +3969,23 @@ static TileIndex FindYardDepot(const Station *st, const Train *v)
 }
 
 /**
+ * A train of wagons just cloned in a depot (free wagons): make it a stopped
+ * train of its own, like a decoupled wagon group. Its orders are cloned after.
+ * @param f First wagon.
+ */
+void MakeClonedWagonTrain(Train *f)
+{
+	f->SetFrontWagon();
+	f->vehstatus |= VS_STOPPED;
+	f->current_order.Free();
+	SetTrainGroupID(f, DEFAULT_GROUP);
+	NormaliseTrainHead(f, CCF_ARRANGE);
+	GroupStatistics::CountVehicle(f, 1);
+	InvalidateWindowData(WC_VEHICLE_DEPOT, f->tile);
+	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
+}
+
+/**
  * Put a wagon group, already cut off from its train, into the yard depot
  * as a stopped train with its own orders, waiting for coupling.
  * @param seg The group.
