@@ -258,6 +258,9 @@ void AfterLoadVehicles(bool part_of_load)
 		if (part_of_load) v->fill_percent_te_id = INVALID_TE_ID;
 		v->first = NULL;
 		if (v->IsGroundVehicle()) v->GetGroundVehicleCache()->first_engine = INVALID_ENGINE;
+
+		/* sigiex-1.6.11 left cloned wagon trains marked as free wagons too. */
+		if (v->type == VEH_TRAIN && Train::From(v)->IsFrontWagon() && Train::From(v)->IsFreeWagon()) Train::From(v)->ClearFreeWagon();
 	}
 
 	/* AfterLoadVehicles may also be called in case of NewGRF reload, in this

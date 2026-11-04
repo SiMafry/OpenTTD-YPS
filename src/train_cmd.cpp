@@ -3975,6 +3975,8 @@ static TileIndex FindYardDepot(const Station *st, const Train *v)
  */
 void MakeClonedWagonTrain(Train *f)
 {
+	/* Built as free wagons: it is a train now, not free wagons any more. */
+	f->ClearFreeWagon();
 	f->SetFrontWagon();
 	f->vehstatus |= VS_STOPPED;
 	f->current_order.Free();
