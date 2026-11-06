@@ -2590,8 +2590,13 @@ static void SaveCoupledOrders(Train *part, const Train *neighbour)
 	 * end (where they mark the next group). Those are its real route: the
 	 * orders of the part as a whole may belong to another group of it (the
 	 * one that was at the cut when the part was left), or be only a bare
-	 * 'wait for couple'. */
-	{
+	 * 'wait for couple'. Only for wagons without a locomotive: a train with
+	 * its own locomotive always keeps its own orders. */
+	bool part_has_engine = false;
+	for (const Train *w = part; w != NULL; w = w->Next()) {
+		if (w->IsEngine()) part_has_engine = true;
+	}
+	if (!part_has_engine) {
 		for (Train *w = part; w != NULL; w = w->Next()) {
 			if (w != part && IsCouplingPoint(w->Previous(), w)) break; // the next group starts here
 			if (w->drawer_orders != NULL && UnitTail(w)->Next() != NULL && UnitHas(UnitTail(w)->Next(), w->drawer_neighbour) && SavedOrdersHaveStation(w->drawer_orders)) {
@@ -3893,7 +3898,12 @@ static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
 		/* Both: the one towards the next group is the group's own (older
 		 * versions could save the orders of a whole multi-group part, i.e.
 		 * of another group, at the front); a bare 'wait for couple' never wins. */
-		if (back != NULL && fwd != NULL && fwd != back && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
+		bool has_engine = false;
+		for (const Train *u = s.first; ; u = u->Next()) {
+			if (u->IsEngine()) has_engine = true;
+			if (u == s.last) break;
+		}
+		if (!has_engine && back != NULL && fwd != NULL && fwd != back && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
 	}
 }
 
