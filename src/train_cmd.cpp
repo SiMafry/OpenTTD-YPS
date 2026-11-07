@@ -4374,7 +4374,8 @@ static Train *SortTrainInYard(Train *v, StationID station)
 		/* The group has reached this yard: move on in its own orders. */
 		AdvanceSavedPosition(d->drawer_orders, d->drawer_real_index, station);
 		d->drawer_impl_index = d->drawer_real_index;
-		StationID dest = NextStationInSavedOrders(d->drawer_orders, d->drawer_real_index, station);
+		/* The saved position is the last place reached: look from the order after it. */
+		StationID dest = NextStationInSavedOrders(d->drawer_orders, d->drawer_real_index + 1, station);
 		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest);
 	}
 
