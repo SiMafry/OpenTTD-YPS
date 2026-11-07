@@ -267,7 +267,7 @@
  *  197   27978   1.8.x
  *  198
  */
-extern const uint16 SAVEGAME_VERSION = 201; ///< Current savegame version of OpenTTD. (201: sigiex saved own orders of coupled parts)
+extern const uint16 SAVEGAME_VERSION = 202; ///< Current savegame version of OpenTTD. (201: sigiex saved own orders of coupled parts, 202: sigiex wagon groups with hard orders)
 
 SavegameType _savegame_type; ///< type of savegame we are loading
 FileToSaveLoad _file_to_saveload; ///< File to save or load in the openttd loop.

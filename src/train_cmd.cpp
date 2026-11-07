@@ -56,15 +56,11 @@ Train *ReverseTrainDirection(Train *v, bool run_around = false);
 
 static StationID NextStationInOrders(const Vehicle *v, VehicleOrderID start, StationID skip);
 static StationID NextStationInSavedOrders(const Order *first, VehicleOrderID start, StationID skip);
-static bool IsCouplingMarker(const Train *u);
-static bool IsCouplingPoint(const Train *a, const Train *b);
 static Train *UnitHead(const Train *x);
 static Train *UnitTail(const Train *x);
 static bool UnitHas(const Train *x, VehicleID id);
-static Train *UnitDrawerTowards(const Train *x, const Train *other);
 
 static bool SavedOrdersHaveStation(const Order *first);
-static void MoveCoupledOrders(Train *from, Train *to);
 static void HandOverToWaitingTrains(StationID station, TileIndex depot, Owner owner);
 static void EnterYardDepot(Train *v, StationID station, TileIndex depot);
 static bool TryReleaseFromYardDepot(Train *v);
@@ -2504,121 +2500,83 @@ static bool TryTrainDecouple(Train *v, Train *u)
 }
 
 /**
- * Forget the saved own orders ("drawer") of this vehicle, if any.
+ * Forget the own orders ("hard orders") of a wagon group kept on this vehicle,
+ * if any. Which group the vehicle belongs to (group_anchor) is not changed.
  */
-void Train::ClearCoupledOrders()
+void Train::ClearHardOrders()
 {
-	Order *o = this->drawer_orders;
+	Order *o = this->hard_orders;
 	while (o != NULL) {
 		Order *next = o->next;
 		delete o;
 		o = next;
 	}
-	this->drawer_orders = NULL;
-	this->drawer_neighbour = INVALID_VEHICLE;
-	this->drawer_share_with = INVALID_VEHICLE;
-	this->drawer_real_index = 0;
-	this->drawer_impl_index = 0;
-	this->drawer_group = DEFAULT_GROUP;
+	this->hard_orders = NULL;
+	this->hard_share_with = INVALID_VEHICLE;
+	this->hard_real_index = 0;
+	this->hard_impl_index = 0;
+	this->hard_group = DEFAULT_GROUP;
+}
+
+/* ===== Wagon groups and their own ("hard") orders =====
+ *
+ * Every vehicle may belong to a wagon group. A group is identified by its
+ * anchor, one of its vehicles, which keeps the group's own orders and the
+ * last place it reached in them. The orders of a train are only a working
+ * copy: when a train is decoupled or sorted, every part gets the own orders
+ * of its group again. The own orders change only when the player edits the
+ * orders of a train that is just that one group, and their position follows
+ * the stations the group goes through.
+ */
+
+/**
+ * The anchor of the wagon group of a vehicle.
+ * @param u The vehicle.
+ * @return The anchor, or NULL if the vehicle is not in a group (or its anchor is not in the same train).
+ */
+static Train *GroupAnchor(const Train *u)
+{
+	Train *a = Train::GetIfValid(u->group_anchor);
+	if (a == NULL || a->group_anchor != a->index || a->hard_orders == NULL) return NULL;
+	if (a->First() != u->First()) return NULL;
+	return a;
 }
 
 /**
- * Move the saved own orders ("drawer") of a wagon group to another vehicle of the group.
- * @param from Vehicle holding them now.
- * @param to Vehicle to hold them.
+ * All wagon groups of a train.
+ * @param t Front of the train.
+ * @param anchors Gets their anchors, each once, in chain order.
  */
-static void MoveCoupledOrders(Train *from, Train *to)
+static void GetGroupAnchors(const Train *t, std::vector<Train *> &anchors)
 {
-	if (from == to) return;
-	to->ClearCoupledOrders();
-	to->drawer_orders = from->drawer_orders;
-	to->drawer_neighbour = from->drawer_neighbour;
-	to->drawer_share_with = from->drawer_share_with;
-	to->drawer_real_index = from->drawer_real_index;
-	to->drawer_impl_index = from->drawer_impl_index;
-	to->drawer_group = from->drawer_group;
-	from->drawer_orders = NULL;
-	from->ClearCoupledOrders();
-}
-
-/**
- * Copy the saved own orders ("drawer") of a wagon group to another vehicle of
- * the group; the original stays (it may mark another coupling place).
- * @param from Vehicle holding them.
- * @param to Vehicle to get a copy.
- * @param neighbour The vehicle \a to is coupled to.
- * @return false if the copy could not be made.
- */
-static bool CopyCoupledOrders(const Train *from, Train *to, const Train *neighbour)
-{
-	int num = 0;
-	for (const Order *o = from->drawer_orders; o != NULL; o = o->next) num++;
-	if (num == 0 || !Order::CanAllocateItem(num)) return false;
-	Order *first = NULL;
-	Order *last = NULL;
-	for (const Order *o = from->drawer_orders; o != NULL; o = o->next) {
-		Order *copy = new Order();
-		copy->AssignOrder(*o);
-		copy->next = NULL;
-		if (last == NULL) first = copy; else last->next = copy;
-		last = copy;
-	}
-	VehicleID share = from->drawer_share_with;
-	VehicleOrderID real = from->drawer_real_index;
-	VehicleOrderID impl = from->drawer_impl_index;
-	GroupID group = from->drawer_group;
-	to->ClearCoupledOrders(); // if to == from, the copy is all that is left
-	to->drawer_orders = first;
-	to->drawer_neighbour = neighbour->index;
-	to->drawer_share_with = share;
-	to->drawer_real_index = real;
-	to->drawer_impl_index = impl;
-	to->drawer_group = group;
-	return true;
-}
-
-/**
- * When a waiting train is coupled to another one, keep a copy of its own orders
- * ("drawer") on its first vehicle, so it can get them back when it is decoupled
- * at the same place later (decouple option "Own orders").
- * @param part First vehicle of the part being coupled; still has its orders.
- * @param neighbour The vehicle it is coupled to (last vehicle of the train in front).
- */
-static void SaveCoupledOrders(Train *part, const Train *neighbour)
-{
-	/* The front group of the part may carry its own saved orders at its other
-	 * end (where they mark the next group). Those are its real route: the
-	 * orders of the part as a whole may belong to another group of it (the
-	 * one that was at the cut when the part was left), or be only a bare
-	 * 'wait for couple'. Only for wagons without a locomotive: a train with
-	 * its own locomotive always keeps its own orders. */
-	bool part_has_engine = false;
-	for (const Train *w = part; w != NULL; w = w->Next()) {
-		if (w->IsEngine()) part_has_engine = true;
-	}
-	if (!part_has_engine) {
-		for (Train *w = part; w != NULL; w = w->Next()) {
-			if (w != part && IsCouplingPoint(w->Previous(), w)) break; // the next group starts here
-			if (w->drawer_orders != NULL && UnitTail(w)->Next() != NULL && UnitHas(UnitTail(w)->Next(), w->drawer_neighbour) && SavedOrdersHaveStation(w->drawer_orders)) {
-				/* Copy them: the original still marks where the next group starts. */
-				if (!CopyCoupledOrders(w, part, neighbour)) break;
-				for (Train *x = part->Next(); x != NULL; x = x->Next()) {
-					if (x->drawer_orders != NULL && !IsCouplingMarker(x)) x->ClearCoupledOrders();
-				}
-				return;
-			}
+	anchors.clear();
+	for (const Train *u = t; u != NULL; u = u->Next()) {
+		Train *a = GroupAnchor(u);
+		if (a == NULL) continue;
+		bool known = false;
+		for (size_t i = 0; i < anchors.size(); i++) {
+			if (anchors[i] == a) known = true;
 		}
+		if (!known) anchors.push_back(a);
 	}
+}
 
-	part->ClearCoupledOrders();
-
-	int num = part->GetNumOrders();
-	if (num == 0 || !Order::CanAllocateItem(num)) return;
+/**
+ * Make the orders of a train (and its position in them) the own orders of a wagon group.
+ * @param a The vehicle to keep them; becomes the anchor of the group.
+ * @param t Front of the train.
+ * @param with_group Also take the group (vehicle list) of the train.
+ * @return false if there are no orders or they could not be copied.
+ */
+static bool SetHardOrdersFromTrain(Train *a, const Train *t, bool with_group)
+{
+	int num = t->GetNumOrders();
+	if (num == 0 || !Order::CanAllocateItem(num)) return false;
 
 	Order *first = NULL;
 	Order *last = NULL;
 	const Order *o;
-	FOR_VEHICLE_ORDERS(part, o) {
+	FOR_VEHICLE_ORDERS(t, o) {
 		Order *copy = new Order();
 		copy->AssignOrder(*o);
 		copy->next = NULL;
@@ -2630,24 +2588,231 @@ static void SaveCoupledOrders(Train *part, const Train *neighbour)
 		last = copy;
 	}
 
-	/* Old copies of these orders left inside the part would later look like a group of their own. */
-	for (Train *w = part->Next(); w != NULL; w = w->Next()) {
-		if (w->drawer_orders != NULL && !IsCouplingMarker(w)) w->ClearCoupledOrders();
-	}
-
-	part->drawer_orders = first;
-	part->drawer_neighbour = neighbour->index;
-	part->drawer_real_index = part->cur_real_order_index;
-	part->drawer_impl_index = part->cur_implicit_order_index;
-	part->drawer_group = part->group_id;
-
-	part->drawer_share_with = INVALID_VEHICLE;
-	for (const Vehicle *w = part->FirstShared(); w != NULL; w = w->NextShared()) {
-		if (w != part) {
-			part->drawer_share_with = w->index;
+	GroupID group = a->hard_orders != NULL ? a->hard_group : DEFAULT_GROUP;
+	a->ClearHardOrders();
+	a->hard_orders = first;
+	a->group_anchor = a->index;
+	a->hard_real_index = t->cur_real_order_index;
+	a->hard_impl_index = t->cur_implicit_order_index;
+	a->hard_group = with_group ? t->group_id : group;
+	for (const Vehicle *w = t->FirstShared(); w != NULL; w = w->NextShared()) {
+		if (w != t) {
+			a->hard_share_with = w->index;
 			break;
 		}
 	}
+	return true;
+}
+
+/**
+ * Are the own orders of a group the same as the orders of a train?
+ * Implicit orders are not counted.
+ * @param a Anchor of the group.
+ * @param t Front of the train.
+ */
+static bool HardOrdersMatchTrain(const Train *a, const Train *t)
+{
+	const Order *h = a->hard_orders;
+	const Order *o = t->GetFirstOrder();
+	for (;;) {
+		while (h != NULL && h->IsType(OT_IMPLICIT)) h = h->next;
+		while (o != NULL && o->IsType(OT_IMPLICIT)) o = o->next;
+		if (h == NULL || o == NULL) return h == o;
+		if (!h->Equals(*o)) return false;
+		h = h->next;
+		o = o->next;
+	}
+}
+
+/**
+ * Is a train just one wagon group? Vehicles not in any group may be with it,
+ * but a locomotive not in a group never makes one with a group of wagons only.
+ * @param t Front of the train.
+ * @param anchor Gets the anchor of the group, NULL if no vehicle is in a group.
+ */
+static bool IsSingleGroupTrain(const Train *t, Train **anchor)
+{
+	Train *found = NULL;
+	bool loose_engine = false;
+	bool group_engine = false;
+	for (const Train *u = t; u != NULL; u = u->Next()) {
+		Train *a = GroupAnchor(u);
+		if (a == NULL) {
+			if (u->IsEngine()) loose_engine = true;
+			continue;
+		}
+		if (found != NULL && a != found) return false;
+		found = a;
+		if (u->IsEngine()) group_engine = true;
+	}
+	if (found != NULL && loose_engine && !group_engine) return false;
+	*anchor = found;
+	return true;
+}
+
+/**
+ * Bring the group of a train that is just one wagon group up to date:
+ * vehicles not in a group join it, and a train without any group becomes one,
+ * with its orders as its own orders.
+ * @param t Front of the train.
+ * @param edited The player changed the orders: they become the own orders of the group.
+ */
+static void UpdateSingleGroup(Train *t, bool edited)
+{
+	Train *a;
+	if (!IsSingleGroupTrain(t, &a)) return;
+	if (a == NULL) {
+		if (!SetHardOrdersFromTrain(t, t, true)) return;
+		a = t;
+	} else if (edited) {
+		SetHardOrdersFromTrain(a, t, true);
+	}
+	for (Train *u = t; u != NULL; u = u->Next()) {
+		if (GroupAnchor(u) == NULL) u->group_anchor = a->index;
+	}
+}
+
+/**
+ * The groups whose own orders a train runs on right now take over its position in them.
+ * @param t Front of the train.
+ */
+static void SyncRunningGroups(Train *t)
+{
+	if (t->GetNumOrders() == 0) return;
+	Train *single = NULL;
+	if (!IsSingleGroupTrain(t, &single)) single = NULL;
+	std::vector<Train *> anchors;
+	GetGroupAnchors(t, anchors);
+	for (size_t i = 0; i < anchors.size(); i++) {
+		if (HardOrdersMatchTrain(anchors[i], t)) SetHardOrdersFromTrain(anchors[i], t, anchors[i] == single);
+	}
+}
+
+/**
+ * A train is going to be coupled to another one: make sure its groups know
+ * their own orders and where they are in them.
+ * @param t Front of the train.
+ */
+static void PrepareGroupsForCouple(Train *t)
+{
+	UpdateSingleGroup(t, false);
+	SyncRunningGroups(t);
+}
+
+/**
+ * The player changed the orders of a vehicle. For every train with these
+ * (shared) orders that is just one wagon group, they are the own orders of
+ * the group from now on.
+ * @param v The vehicle.
+ */
+void TrainOrdersEditedByPlayer(Vehicle *v)
+{
+	if (v == NULL || v->type != VEH_TRAIN || !v->IsPrimaryVehicle()) return;
+	for (Vehicle *w = v->FirstShared(); w != NULL; w = w->NextShared()) {
+		if (w->type == VEH_TRAIN && w->IsPrimaryVehicle()) UpdateSingleGroup(Train::From(w), true);
+	}
+}
+
+/**
+ * Move the own orders of a group to another of its vehicles.
+ * @param from The anchor now.
+ * @param to The new anchor.
+ */
+static void MoveHardOrders(Train *from, Train *to)
+{
+	if (from == to) return;
+	to->ClearHardOrders();
+	to->hard_orders = from->hard_orders;
+	to->hard_share_with = from->hard_share_with;
+	to->hard_real_index = from->hard_real_index;
+	to->hard_impl_index = from->hard_impl_index;
+	to->hard_group = from->hard_group;
+	to->group_anchor = to->index;
+	from->hard_orders = NULL;
+	from->ClearHardOrders();
+}
+
+/**
+ * A train was just cut in two. A wagon group that was cut apart stays a group
+ * in the part with its locomotive, or else in the part with more of its
+ * vehicles; its vehicles in the other part are not in a group any more.
+ * @param a Front of one part.
+ * @param b Front of the other part.
+ */
+static void SettleCutGroups(Train *a, Train *b)
+{
+	std::vector<VehicleID> ids;
+	for (int side = 0; side < 2; side++) {
+		for (Train *u = side == 0 ? a : b; u != NULL; u = u->Next()) {
+			if (u->group_anchor == INVALID_VEHICLE) continue;
+			bool known = false;
+			for (size_t i = 0; i < ids.size(); i++) {
+				if (ids[i] == u->group_anchor) known = true;
+			}
+			if (!known) ids.push_back(u->group_anchor);
+		}
+	}
+
+	for (size_t i = 0; i < ids.size(); i++) {
+		VehicleID id = ids[i];
+		Train *anchor = Train::GetIfValid(id);
+		if (anchor == NULL || anchor->group_anchor != id || anchor->hard_orders == NULL) continue;
+		Train *anchor_part = anchor->First();
+		if (anchor_part != a && anchor_part != b) continue;
+
+		uint units[2] = { 0, 0 };
+		bool engine[2] = { false, false };
+		Train *first_in[2] = { NULL, NULL };
+		for (int side = 0; side < 2; side++) {
+			for (Train *u = side == 0 ? a : b; u != NULL; u = u->Next()) {
+				if (u->group_anchor != id) continue;
+				if (first_in[side] == NULL) first_in[side] = u;
+				if (!u->IsArticulatedPart()) units[side]++;
+				if (u->IsEngine()) engine[side] = true;
+			}
+		}
+		if (first_in[0] == NULL || first_in[1] == NULL) continue; // not cut apart
+
+		int keep;
+		if (engine[0] != engine[1]) {
+			keep = engine[0] ? 0 : 1;
+		} else if (units[0] != units[1]) {
+			keep = units[0] > units[1] ? 0 : 1;
+		} else {
+			keep = anchor_part == a ? 0 : 1;
+		}
+		Train *keep_front = keep == 0 ? a : b;
+		Train *drop_front = keep == 0 ? b : a;
+
+		if (anchor_part != keep_front) {
+			Train *n = first_in[keep];
+			MoveHardOrders(anchor, n);
+			for (Train *u = keep_front; u != NULL; u = u->Next()) {
+				if (u->group_anchor == id) u->group_anchor = n->index;
+			}
+		}
+		for (Train *u = drop_front; u != NULL; u = u->Next()) {
+			if (u->group_anchor == id) u->group_anchor = INVALID_VEHICLE;
+		}
+	}
+}
+
+/**
+ * The group whose own orders a part of a decoupled train gets: the group of
+ * a locomotive in the part (the one nearest to the cut), otherwise the group
+ * at the cut.
+ * @param cut_end The vehicle of the part at the cut.
+ * @param inwards_next Walk into the part with Next() (else with Previous()).
+ * @return The anchor of the group, or NULL.
+ */
+static Train *PartLeaderGroup(Train *cut_end, bool inwards_next)
+{
+	for (Train *u = cut_end; u != NULL; u = inwards_next ? u->Next() : u->Previous()) {
+		if (!u->IsEngine()) continue;
+		Train *a = GroupAnchor(u);
+		if (a != NULL) return a;
+	}
+	return GroupAnchor(cut_end);
 }
 
 /**
@@ -2689,10 +2854,6 @@ static bool IsSavedOrderDestinationValid(const Order *o, Owner owner)
 	}
 }
 
-/* Saved orders mark a coupling place by the vehicle they were coupled to.
- * Articulated vehicles can swap the roles of their parts when the train is
- * turned, so the comparison is made by whole vehicles ("units"). */
-
 /** First part of the articulated vehicle a vehicle belongs to. */
 static Train *UnitHead(const Train *x)
 {
@@ -2717,56 +2878,44 @@ static bool UnitHas(const Train *x, VehicleID id)
 	return false;
 }
 
-/** The vehicle of the unit of \a x whose saved orders point at the unit of \a other, or NULL. */
-static Train *UnitDrawerTowards(const Train *x, const Train *other)
-{
-	for (Train *u = UnitHead(x); u != NULL; u = u->Next()) {
-		if (u->drawer_orders != NULL && UnitHas(other, u->drawer_neighbour)) return u;
-		if (u->Next() == NULL || !u->Next()->IsArticulatedPart()) break;
-	}
-	return NULL;
-}
-
 /**
- * Find the vehicle that holds the saved own orders of a part of a just decoupled train.
- * The part only gets its orders back when the train was cut exactly where the
- * part was coupled.
- * @param inner_end The vehicle of the part at the cut.
- * @param other_end The vehicle of the other part at the cut.
- * @return The vehicle with the saved orders, or NULL.
+ * Give a train (or a part of one) the own orders of a wagon group as its orders.
+ * The group keeps them.
+ * @param t Front of the train.
+ * @param a Anchor of the group.
+ * @param skip_wait Continue after the last place reached when that is a station or a coupling order.
+ * @return true if the orders were set.
  */
-static Train *FindCoupledOrders(Train *inner_end, const Train *other_end)
-{
-	return UnitDrawerTowards(inner_end, other_end);
-}
-
-/**
- * Give a part of a decoupled train back the orders it had before it was coupled.
- * @param t Front of the part.
- * @param drawer Vehicle of the part holding the saved orders.
- * @return true if the orders were restored.
- */
-static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true, bool keep_drawer = false)
+static bool RestoreHardOrders(Train *t, const Train *a, bool skip_wait = true)
 {
 	int num = 0;
-	for (const Order *o = drawer->drawer_orders; o != NULL; o = o->next) num++;
+	for (const Order *o = a->hard_orders; o != NULL; o = o->next) num++;
 	if (num == 0) return false;
+
+	/* Copy what is needed: the anchor may be part of the train itself. */
+	VehicleID share_id = a->hard_share_with;
+	VehicleOrderID real = a->hard_real_index;
+	VehicleOrderID impl = a->hard_impl_index;
+	GroupID g = a->hard_group;
+
+	/* Share again with the vehicle it shared with, if that one still has the same orders. */
+	Vehicle *share = Vehicle::GetIfValid(share_id);
+	bool can_share = share != NULL && share != t && share->type == VEH_TRAIN && share->IsPrimaryVehicle() &&
+			share->owner == t->owner && share->orders.list != NULL && OrdersMatchSaved(share, a->hard_orders);
+	if (!can_share) {
+		if (!Order::CanAllocateItem(num)) return false;
+		if (t->orders.list == NULL && !OrderList::CanAllocateItem()) return false;
+	}
 
 	DeleteVehicleOrders(t, false, true);
 	t->current_order.Free();
 
-	/* Share again with the vehicle it shared with, if that one still has the same orders. */
-	Vehicle *share = Vehicle::GetIfValid(drawer->drawer_share_with);
-	if (share != NULL && share != t && share->type == VEH_TRAIN && share->IsPrimaryVehicle() &&
-			share->owner == t->owner && share->orders.list != NULL && OrdersMatchSaved(share, drawer->drawer_orders)) {
+	if (can_share) {
 		t->orders.list = share->orders.list;
 		t->AddToShared(share);
 	} else {
-		if (!Order::CanAllocateItem(num)) return false;
-		if (t->orders.list == NULL && !OrderList::CanAllocateItem()) return false;
-
 		int index = 0;
-		for (const Order *o = drawer->drawer_orders; o != NULL; o = o->next, index++) {
+		for (const Order *o = a->hard_orders; o != NULL; o = o->next, index++) {
 			Order *copy = new Order();
 			copy->AssignOrder(*o);
 			if (!IsSavedOrderDestinationValid(copy, t->owner)) copy->MakeDummy();
@@ -2774,22 +2923,18 @@ static bool RestoreCoupledOrders(Train *t, Train *drawer, bool skip_wait = true,
 		}
 	}
 
-	/* Continue where it was when it was coupled, after its 'wait for couple' order. */
-	t->cur_real_order_index = drawer->drawer_real_index < t->GetNumOrders() ? drawer->drawer_real_index : 0;
-	t->cur_implicit_order_index = drawer->drawer_impl_index < t->GetNumOrders() ? drawer->drawer_impl_index : 0;
+	/* Continue after the last place reached: a station, or where it was coupled. */
+	t->cur_real_order_index = real < t->GetNumOrders() ? real : 0;
+	t->cur_implicit_order_index = impl < t->GetNumOrders() ? impl : 0;
 	const Order *current = t->GetOrder(t->cur_real_order_index);
-	/* The saved position is the last place reached: the 'wait for couple'
-	 * where it was coupled, or the last shunting yard it went through. */
-	if (skip_wait && current != NULL && (current->IsType(OT_WAIT_COUPLE) || current->IsType(OT_GOTO_STATION))) t->IncrementImplicitOrderIndex();
+	if (skip_wait && current != NULL && (current->IsType(OT_WAIT_COUPLE) || current->IsType(OT_GOTO_COUPLE) || current->IsType(OT_GOTO_STATION))) t->IncrementImplicitOrderIndex();
 
-	GroupID g = drawer->drawer_group;
 	if (!IsDefaultGroupID(g) && Group::IsValidID(g) && Group::Get(g)->owner == t->owner && Group::Get(g)->vehicle_type == VEH_TRAIN) {
 		GroupStatistics::CountVehicle(t, -1);
 		SetTrainGroupID(t, g);
 		GroupStatistics::CountVehicle(t, 1);
 	}
 
-	if (!keep_drawer) drawer->ClearCoupledOrders();
 	InvalidateVehicleOrder(t, VIWD_REMOVE_ALL_ORDERS);
 	return true;
 }
@@ -2868,30 +3013,19 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 	OrderDecoupleOrdersFlags first_type = after_decouple_flags->GetDecoupleFirstOrdersType();
 	OrderDecoupleOrdersFlags second_type = after_decouple_flags->GetDecoupleSecondOrdersType();
 
-	/* Saved own orders of the parts, found at the cut. */
-	Train *first_drawer = NULL;
-	Train *second_drawer = NULL;
+	/* The wagon groups whose own orders the parts get ("Own orders"). */
+	Train *first_src = NULL;
+	Train *second_src = NULL;
 	if (v != u) {
-		Train *a = v->Last(); // last vehicle of the first part
-		first_drawer = FindCoupledOrders(a, u);
-		second_drawer = FindCoupledOrders(u, a);
+		first_src = PartLeaderGroup(v->Last(), false);
+		second_src = PartLeaderGroup(u, true);
 	}
 
 	if (v != u) {
 		if (second_type == ODOF_OWN_ORDERS) {
-			bool restored = second_drawer != NULL && RestoreCoupledOrders(u, second_drawer);
-			if (!restored && second_drawer == NULL) {
-				/* Nothing saved right at the cut (wagons that lost their own
-				 * orders in older versions): take the route of the first wagon
-				 * group behind them, keeping that group's saved orders. */
-				for (Train *w = u; w != NULL; w = w->Next()) {
-					if (w->drawer_orders == NULL || !SavedOrdersHaveStation(w->drawer_orders)) continue;
-					restored = RestoreCoupledOrders(u, w, true, true);
-					break;
-				}
-			}
+			bool restored = second_src != NULL && RestoreHardOrders(u, second_src);
 			if (!restored) {
-				/* Nothing saved for this cut: just wait. */
+				/* Not in a group with own orders: just wait. */
 				CreateWaitForCoupleOrder(u);
 			}
 			ProcessOrders(u);
@@ -2943,16 +3077,16 @@ void SplitOrders(Train *v, Train *u, DecoupleLoad &load_trains)
 			CreateWaitForCoupleOrder(v);
 			break;
 		case ODOF_OWN_ORDERS:
-			if (first_drawer == NULL || !RestoreCoupledOrders(v, first_drawer)) {
+			if (first_src == NULL || !RestoreHardOrders(v, first_src)) {
 				DeleteVehicleOrders(v, false, true);
 				CreateWaitForCoupleOrder(v);
-				first_drawer = NULL;
+				first_src = NULL;
 			}
 			break;
 		default: NOT_REACHED();
 	}
 	ProcessOrders(v);
-	if (first_type == ODOF_OWN_ORDERS && first_drawer != NULL && OwnOrdersStopHere(v)) load_trains |= DECOUPLE_LOAD_FIRST;
+	if (first_type == ODOF_OWN_ORDERS && first_src != NULL && OwnOrdersStopHere(v)) load_trains |= DECOUPLE_LOAD_FIRST;
 }
 
 static Train *DecoupleTrain(Train *v)
@@ -2978,6 +3112,9 @@ static Train *DecoupleTrain(Train *v)
 
 	NormaliseTrainHead(u, CCF_ARRANGE_STATION);
 	NormaliseTrainHead(v, CCF_ARRANGE_STATION);
+
+	/* A wagon group cut apart stays a group in one of the parts only. */
+	SettleCutGroups(v, u);
 
 	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
 	return u;
@@ -3848,27 +3985,15 @@ int Train::UpdateSpeed()
 
 /* ===== Shunting yard ("Rozřadit") ===== */
 
-/** A piece of a train between two places where something was coupled. */
+/** A piece of a train that is one wagon group (or vehicles in no group). */
 struct TrainSegment {
 	Train *first;  ///< First vehicle of the segment (in chain order).
 	Train *last;   ///< Last vehicle of the segment (in chain order).
-	Train *drawer; ///< Vehicle holding the saved own orders of this wagon group, or NULL.
+	Train *anchor; ///< Anchor of the wagon group, NULL for vehicles not in a group.
 };
 
 /**
- * Is there a coupling point between two neighbouring vehicles of a train?
- * @param a A vehicle.
- * @param b The vehicle after it.
- */
-static bool IsCouplingPoint(const Train *a, const Train *b)
-{
-	/* Never inside an articulated vehicle. */
-	if (b->IsArticulatedPart()) return false;
-	return UnitDrawerTowards(b, a) != NULL || UnitDrawerTowards(a, b) != NULL;
-}
-
-/**
- * Split a train (logically) into the wagon groups it was coupled from.
+ * Split a train (logically) into its wagon groups.
  * @param v Front of the train.
  * @param segments Gets the segments in chain order.
  */
@@ -3877,33 +4002,18 @@ static void GetTrainSegments(Train *v, std::vector<TrainSegment> &segments)
 	segments.clear();
 	TrainSegment seg;
 	seg.first = v;
-	seg.drawer = NULL;
+	seg.anchor = GroupAnchor(v);
 	for (Train *u = v; u != NULL; u = u->Next()) {
 		Train *next = u->Next();
-		if (next == NULL || IsCouplingPoint(u, next)) {
+		/* Never split inside an articulated vehicle. */
+		if (next == NULL || (!next->IsArticulatedPart() && GroupAnchor(next) != seg.anchor)) {
 			seg.last = u;
 			segments.push_back(seg);
 			if (next != NULL) {
 				seg.first = next;
-				seg.drawer = NULL;
+				seg.anchor = GroupAnchor(next);
 			}
 		}
-	}
-	/* Find the saved orders of each group: at its start pointing back, or at its end pointing forward. */
-	for (size_t i = 0; i < segments.size(); i++) {
-		TrainSegment &s = segments[i];
-		Train *back = (i > 0) ? UnitDrawerTowards(s.first, segments[i - 1].last) : NULL;
-		Train *fwd = (i + 1 < segments.size()) ? UnitDrawerTowards(s.last, segments[i + 1].first) : NULL;
-		s.drawer = back != NULL ? back : fwd;
-		/* Both: the one towards the next group is the group's own (older
-		 * versions could save the orders of a whole multi-group part, i.e.
-		 * of another group, at the front); a bare 'wait for couple' never wins. */
-		bool has_engine = false;
-		for (const Train *u = s.first; ; u = u->Next()) {
-			if (u->IsEngine()) has_engine = true;
-			if (u == s.last) break;
-		}
-		if (!has_engine && back != NULL && fwd != NULL && fwd != back && SavedOrdersHaveStation(fwd->drawer_orders)) s.drawer = fwd;
 	}
 }
 
@@ -3916,49 +4026,179 @@ static bool SavedOrdersHaveStation(const Order *first)
 	return false;
 }
 
-/** Do the saved orders of a vehicle still mark a place where something was coupled? */
-static bool IsCouplingMarker(const Train *u)
+/* ===== Conversion of games saved before wagon groups (savegame version 202) =====
+ * Before, the own orders of a coupled part were kept ("drawer") on the vehicle
+ * where it was coupled, pointing to the vehicle it was coupled to; these are
+ * the same fields that now hold the hard orders and the group anchor. */
+
+/** The vehicle of the unit of \a x whose old saved orders point at the unit of \a other, or NULL. */
+static Train *LegacyDrawerTowards(const Train *x, const Train *other)
 {
-	if (u->drawer_orders == NULL) return false;
-	const Train *prev = UnitHead(u)->Previous();
-	const Train *next = UnitTail(u)->Next();
-	return (prev != NULL && UnitHas(prev, u->drawer_neighbour)) || (next != NULL && UnitHas(next, u->drawer_neighbour));
+	for (Train *u = UnitHead(x); u != NULL; u = u->Next()) {
+		if (u->hard_orders != NULL && UnitHas(other, u->group_anchor)) return u;
+		if (u->Next() == NULL || !u->Next()->IsArticulatedPart()) break;
+	}
+	return NULL;
+}
+
+/** Old coupling point between two neighbouring vehicles? */
+static bool LegacyCouplingPoint(const Train *a, const Train *b)
+{
+	if (b->IsArticulatedPart()) return false;
+	return LegacyDrawerTowards(b, a) != NULL || LegacyDrawerTowards(a, b) != NULL;
+}
+
+/** An old wagon group and where its saved orders were. */
+struct LegacySegment {
+	Train *first;
+	Train *last;
+	Train *drawer;
+	bool engine;
+};
+
+/** Split a train into its old wagon groups (as sigiex 1.6.15 did). */
+static void LegacySegments(Train *v, std::vector<LegacySegment> &segments)
+{
+	segments.clear();
+	LegacySegment seg;
+	seg.first = v;
+	for (Train *u = v; u != NULL; u = u->Next()) {
+		Train *next = u->Next();
+		if (next == NULL || LegacyCouplingPoint(u, next)) {
+			seg.last = u;
+			segments.push_back(seg);
+			if (next != NULL) seg.first = next;
+		}
+	}
+	for (size_t i = 0; i < segments.size(); i++) {
+		LegacySegment &s = segments[i];
+		s.engine = false;
+		for (const Train *u = s.first; ; u = u->Next()) {
+			if (u->IsEngine()) s.engine = true;
+			if (u == s.last) break;
+		}
+		Train *back = (i > 0) ? LegacyDrawerTowards(s.first, segments[i - 1].last) : NULL;
+		Train *fwd = (i + 1 < segments.size()) ? LegacyDrawerTowards(s.last, segments[i + 1].first) : NULL;
+		s.drawer = back != NULL ? back : fwd;
+		if (!s.engine && back != NULL && fwd != NULL && fwd != back && SavedOrdersHaveStation(fwd->hard_orders)) s.drawer = fwd;
+	}
+}
+
+/** A wagon group to be made when converting an old game. */
+struct LegacyNewGroup {
+	Train *first;         ///< First vehicle of the group; becomes its anchor.
+	Train *last;          ///< Last vehicle of the group.
+	const Train *soft;    ///< Take the orders of this train, or NULL.
+	Order *orders;        ///< Else these (copied) saved orders.
+	VehicleID share;
+	VehicleOrderID real;
+	VehicleOrderID impl;
+	GroupID group;
+};
+
+/** Copy a list of saved orders; NULL if not possible. */
+static Order *CopySavedOrders(const Order *from)
+{
+	int num = 0;
+	for (const Order *o = from; o != NULL; o = o->next) num++;
+	if (num == 0 || !Order::CanAllocateItem(num)) return NULL;
+	Order *first = NULL;
+	Order *last = NULL;
+	for (const Order *o = from; o != NULL; o = o->next) {
+		Order *copy = new Order();
+		copy->AssignOrder(*o);
+		copy->next = NULL;
+		if (last == NULL) first = copy; else last->next = copy;
+		last = copy;
+	}
+	return first;
 }
 
 /**
- * Saved orders that no longer mark a coupling place (older versions could
- * leave them behind): among the locomotive's own vehicles they mark a lost
- * group, which is restored; inside a wagon group they are an old copy, which
- * is forgotten. A group never starts inside an articulated vehicle.
- * @param v Front of the train.
- * @param segments Its segments.
- * @return true if something changed.
+ * Make wagon groups from the saved own orders of coupled parts of a game
+ * saved before version 202. The part with the locomotive (or a train on its
+ * own) gets the orders of the train; a coupled part gets its saved orders.
+ * Wagons that had no saved orders of their own are not in a group.
  */
-static bool RepairLostGroups(Train *v, const std::vector<TrainSegment> &segments)
+void ConvertCoupledOrdersToGroups()
 {
-	bool changed = false;
-	for (size_t i = 0; i < segments.size(); i++) {
-		const Train *own = segments[i].drawer;
-		for (Train *u = segments[i].first; ; u = u->Next()) {
-			if (u != v && u->drawer_orders != NULL && u != own && !IsCouplingMarker(u)) {
-				Train *head = u;
-				while (head->IsArticulatedPart() && head->Previous() != NULL) head = head->Previous();
-				if (i == 0 && head != v && (head == u || head->drawer_orders == NULL)) {
-					/* Among the locomotive's own vehicles: a group that was lost
-					 * track of; it starts with the whole vehicle holding the orders. */
-					MoveCoupledOrders(u, head);
-					head->drawer_neighbour = head->Previous()->index;
-				} else {
-					/* Inside a wagon group: an old copy left from an earlier
-					 * coupling. Forget it, the group keeps its own orders. */
-					u->ClearCoupledOrders();
-				}
-				changed = true;
+	std::vector<LegacyNewGroup> groups;
+	Train *v;
+	FOR_ALL_TRAINS(v) {
+		if (v->Previous() != NULL) continue;
+		std::vector<LegacySegment> segments;
+		LegacySegments(v, segments);
+		bool has_soft = v->IsPrimaryVehicle() && v->GetNumOrders() > 0;
+		bool soft_used = false;
+		int first_loose = -1;
+		int first_loose_engine = -1;
+		for (size_t i = 0; i < segments.size(); i++) {
+			const LegacySegment &s = segments[i];
+			LegacyNewGroup g;
+			g.first = s.first;
+			g.last = s.last;
+			g.soft = NULL;
+			g.orders = NULL;
+			const Train *d = s.drawer;
+			bool use_drawer = d != NULL && d->hard_orders != NULL;
+			/* The front part runs on the orders of the train, unless it was the
+			 * waiting part when coupling: then its own route is saved at its
+			 * other end, and the train runs on the orders of the coupling one. */
+			if (i == 0 && (!use_drawer || !SavedOrdersHaveStation(d->hard_orders))) use_drawer = false;
+			if (use_drawer) {
+				g.orders = CopySavedOrders(d->hard_orders);
+				if (g.orders == NULL) continue;
+				g.share = d->hard_share_with;
+				g.real = d->hard_real_index;
+				g.impl = d->hard_impl_index;
+				g.group = d->hard_group;
+			} else if (i == 0 && has_soft) {
+				g.soft = v;
+				soft_used = true;
+			} else {
+				if (first_loose < 0) first_loose = (int)i;
+				if (first_loose_engine < 0 && s.engine) first_loose_engine = (int)i;
+				continue;
 			}
-			if (u == segments[i].last) break;
+			groups.push_back(g);
+		}
+		/* Orders of the train not used by its front part: they belong to the part
+		 * that coupled it (with a locomotive), or else to wagons without saved orders. */
+		if (first_loose_engine >= 0) first_loose = first_loose_engine;
+		if (has_soft && !soft_used && first_loose >= 0) {
+			LegacyNewGroup g;
+			g.first = segments[first_loose].first;
+			g.last = segments[first_loose].last;
+			g.soft = v;
+			g.orders = NULL;
+			groups.push_back(g);
 		}
 	}
-	return changed;
+
+	/* Forget the old saved orders and markers. */
+	FOR_ALL_TRAINS(v) {
+		v->ClearHardOrders();
+		v->group_anchor = INVALID_VEHICLE;
+	}
+
+	for (size_t i = 0; i < groups.size(); i++) {
+		LegacyNewGroup &g = groups[i];
+		Train *a = g.first;
+		if (g.soft != NULL) {
+			if (!SetHardOrdersFromTrain(a, g.soft, true)) continue;
+		} else {
+			a->hard_orders = g.orders;
+			a->group_anchor = a->index;
+			a->hard_share_with = g.share;
+			a->hard_real_index = g.real;
+			a->hard_impl_index = g.impl;
+			a->hard_group = g.group;
+		}
+		for (Train *u = g.first; ; u = u->Next()) {
+			u->group_anchor = a->index;
+			if (u == g.last) break;
+		}
+	}
 }
 
 /**
@@ -4040,7 +4280,7 @@ static void StoreGroupInDepot(TrainSegment &seg, TileIndex depot)
 	NormaliseTrainHead(f, CCF_ARRANGE);
 	GroupStatistics::CountVehicle(f, 1);
 
-	if (seg.drawer != NULL) RestoreCoupledOrders(f, seg.drawer, false);
+	if (seg.anchor != NULL) RestoreHardOrders(f, seg.anchor, false);
 	if (f->GetNumOrders() == 0) {
 		/* No own orders saved: it just waits here. */
 		DeleteVehicleOrders(f, false, true);
@@ -4062,15 +4302,11 @@ static void StoreGroupInDepot(TrainSegment &seg, TileIndex depot)
 static void RepairWaitingGroup(Train *g)
 {
 	if (g->orders.list != NULL && SavedOrdersHaveStation(g->GetFirstOrder())) return;
-	for (Train *w = g; w != NULL; w = w->Next()) {
-		if (w != g && IsCouplingPoint(w->Previous(), w) && UnitDrawerTowards(w->Previous(), w) == NULL) break; // another group
-		if (w->drawer_orders == NULL || !SavedOrdersHaveStation(w->drawer_orders)) continue;
-		/* Keep the saved orders: they may still mark where the next group starts. */
-		if (!RestoreCoupledOrders(g, w, false, IsCouplingMarker(w))) return;
-		g->current_order.AssignOrder(*g->GetOrder(g->cur_real_order_index));
-		SetWindowDirty(WC_VEHICLE_VIEW, g->index);
-		return;
-	}
+	Train *a = GroupAnchor(g);
+	if (a == NULL || !SavedOrdersHaveStation(a->hard_orders)) return;
+	if (!RestoreHardOrders(g, a, false)) return;
+	g->current_order.AssignOrder(*g->GetOrder(g->cur_real_order_index));
+	SetWindowDirty(WC_VEHICLE_VIEW, g->index);
 }
 
 /**
@@ -4106,7 +4342,7 @@ static void AdvanceSavedPosition(const Order *first, VehicleOrderID &index, Stat
 }
 
 /**
- * A train leaves a station: every coupled wagon group, for which this station
+ * A train leaves a station: every wagon group of it, for which this station
  * is the next one in its own orders, has now reached it. (Shunting yards
  * already did this on arrival.)
  * @param v Front of the train.
@@ -4116,9 +4352,9 @@ void AdvanceCoupledGroupsAtStation(Train *v, StationID station)
 {
 	if (station == INVALID_STATION) return;
 	for (Train *u = v; u != NULL; u = u->Next()) {
-		if (u->drawer_orders == NULL) continue;
-		AdvanceSavedPosition(u->drawer_orders, u->drawer_real_index, station);
-		u->drawer_impl_index = u->drawer_real_index;
+		if (u->hard_orders == NULL || u->group_anchor != u->index) continue;
+		AdvanceSavedPosition(u->hard_orders, u->hard_real_index, station);
+		u->hard_impl_index = u->hard_real_index;
 	}
 }
 
@@ -4153,8 +4389,8 @@ static void TakeGroupFromDepot(Train *v, Train *g)
 	DeleteWindowById(WC_VEHICLE_TIMETABLE, g->index);
 	DeleteNewGRFInspectWindow(GSF_TRAINS, g->index);
 
-	/* Keep its own orders, just like with normal coupling. */
-	SaveCoupledOrders(g, last);
+	/* Its group keeps its own orders and where it is in them, just like with normal coupling. */
+	PrepareGroupsForCouple(g);
 
 	DeleteVehicleOrders(g);
 	RemoveVehicleFromGroup(g);
@@ -4333,16 +4569,6 @@ static Train *SortTrainInYard(Train *v, StationID station)
 
 	std::vector<TrainSegment> segments;
 	GetTrainSegments(v, segments);
-	if (RepairLostGroups(v, segments)) GetTrainSegments(v, segments);
-	/* Wagons behind a group boundary without saved orders of their own (lost
-	 * in older versions) go with the group next to them. */
-	for (size_t i = 1; i < segments.size(); i++) {
-		if (segments[i].drawer != NULL) continue;
-		Train *src = segments[i - 1].drawer;
-		if (src == NULL && i + 1 < segments.size()) src = segments[i + 1].drawer;
-		if (src == NULL || !SavedOrdersHaveStation(src->drawer_orders)) continue;
-		if (CopyCoupledOrders(src, segments[i].first, segments[i - 1].last)) segments[i].drawer = segments[i].first;
-	}
 
 	/* The part with the locomotive must be the front; it stays. */
 	size_t main = 0;
@@ -4369,13 +4595,13 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	/* Decide which groups stay and cut the train apart. */
 	std::vector<bool> keep(segments.size(), true);
 	for (size_t i = 1; i < segments.size(); i++) {
-		if (segments[i].drawer == NULL) continue; // nothing known about it: stays with the train
-		Train *d = segments[i].drawer;
+		if (segments[i].anchor == NULL) continue; // not in a group: stays with the train
+		Train *d = segments[i].anchor;
 		/* The group has reached this yard: move on in its own orders. */
-		AdvanceSavedPosition(d->drawer_orders, d->drawer_real_index, station);
-		d->drawer_impl_index = d->drawer_real_index;
+		AdvanceSavedPosition(d->hard_orders, d->hard_real_index, station);
+		d->hard_impl_index = d->hard_real_index;
 		/* The saved position is the last place reached: look from the order after it. */
-		StationID dest = NextStationInSavedOrders(d->drawer_orders, d->drawer_real_index + 1, station);
+		StationID dest = NextStationInSavedOrders(d->hard_orders, d->hard_real_index + 1, station);
 		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest);
 	}
 
@@ -4394,7 +4620,7 @@ static Train *SortTrainInYard(Train *v, StationID station)
 			if (keep[i]) total += units[i];
 		}
 		for (size_t i = segments.size() - 1; i > 0 && total > max_units; i--) {
-			if (!keep[i] || segments[i].drawer == NULL) continue;
+			if (!keep[i] || segments[i].anchor == NULL) continue;
 			keep[i] = false;
 			total -= units[i];
 		}
@@ -4406,17 +4632,6 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	for (size_t i = 1; i < segments.size(); i++) {
 		if (!keep[i]) continue;
 		tail->SetNext(segments[i].first);
-		/* The vehicle in front of the group may have changed (a group between
-		 * them went to the depot): keep the group recognisable by pointing its
-		 * saved orders at its new neighbour, at the front of the group. */
-		Train *d = segments[i].drawer;
-		if (d == segments[i].first) {
-			d->drawer_neighbour = tail->index;
-		} else if (d != NULL) {
-			/* Saved at its rear end, where they also mark the start of the next
-			 * group: keep them there and put a copy at the front. */
-			CopyCoupledOrders(d, segments[i].first, tail);
-		}
 		tail = segments[i].last;
 	}
 
@@ -4441,8 +4656,10 @@ static Train *SortTrainInYard(Train *v, StationID station)
  */
 static bool TrainHasWagonGroups(Train *v)
 {
-	for (Train *u = v; u != NULL && u->Next() != NULL; u = u->Next()) {
-		if (IsCouplingPoint(u, u->Next())) return true;
+	std::vector<TrainSegment> segments;
+	GetTrainSegments(v, segments);
+	for (size_t i = 1; i < segments.size(); i++) {
+		if (segments[i].anchor != NULL) return true;
 	}
 	return false;
 }
@@ -5816,6 +6033,11 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 		/* Reverse swap first and last vehicle */
 		u = u->First();
 	}
+	/* Both trains are still on their own orders: their wagon groups take over
+	 * where they are in them (the coupling train stands at its 'go to couple',
+	 * the waiting one at its 'wait for couple'). */
+	PrepareGroupsForCouple(v);
+	PrepareGroupsForCouple(u);
 	v->IncrementImplicitOrderIndex();
 	ProcessOrders(v);
 	ReverseTrainDirection(v);
@@ -5843,8 +6065,6 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	DeleteNewGRFInspectWindow(GSF_TRAINS, u->index);
 	SetWindowDirty(WC_COMPANY, _current_company);
 	
-	/* Keep the own orders of the coupled part, to give them back when decoupling. */
-	SaveCoupledOrders(u, v_last);
 
 	DeleteVehicleOrders(u);
 	RemoveVehicleFromGroup(u);

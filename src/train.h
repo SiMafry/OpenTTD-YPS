@@ -119,26 +119,33 @@ struct Train FINAL : public GroundVehicle<Train, VEH_TRAIN> {
 	uint16 wait_counter;
 
 	/**
-	 * Saved own orders ("drawer") of a part of the train that was coupled to it.
-	 * Only set on the first vehicle of the coupled part; see SaveCoupledOrders().
+	 * Wagon groups ("hard" own orders). Every vehicle may belong to a wagon group,
+	 * identified by its anchor vehicle; the anchor keeps the group's own orders,
+	 * which are only changed when the group runs on its own (or by the player
+	 * editing the orders of a train that is just that group). The orders of the
+	 * train itself are a working copy, filled from these at decoupling/sorting.
 	 */
-	Order *drawer_orders;              ///< Copies of the orders of the coupled part, NULL if there are none.
-	VehicleID drawer_neighbour;        ///< The vehicle the part was coupled to; the part is cut off there again.
-	VehicleID drawer_share_with;       ///< A vehicle that shared these orders when coupling, INVALID_VEHICLE if none.
-	VehicleOrderID drawer_real_index;  ///< Real order index of the part when coupling.
-	VehicleOrderID drawer_impl_index;  ///< Implicit order index of the part when coupling.
-	GroupID drawer_group;              ///< Group of the part when coupling.
+	VehicleID group_anchor;            ///< Anchor of the wagon group this vehicle belongs to, INVALID_VEHICLE if none.
+	Order *hard_orders;                ///< On the anchor: the group's own orders, NULL otherwise.
+	VehicleID hard_share_with;         ///< On the anchor: a vehicle that shared these orders, INVALID_VEHICLE if none.
+	VehicleOrderID hard_real_index;    ///< On the anchor: last place reached in the own orders.
+	VehicleOrderID hard_impl_index;    ///< On the anchor: implicit order index belonging to it.
+	GroupID hard_group;                ///< On the anchor: group of the vehicle list for the group.
 
 	/** We don't want GCC to zero our struct! It already is zeroed and has an index! */
-	Train() : GroundVehicleBase() {}
+	Train() : GroundVehicleBase()
+	{
+		this->group_anchor = INVALID_VEHICLE;
+		this->hard_share_with = INVALID_VEHICLE;
+	}
 	/** We want to 'destruct' the right class. */
 	virtual ~Train()
 	{
-		if (!Train::CleaningPool()) this->ClearCoupledOrders();
+		if (!Train::CleaningPool()) this->ClearHardOrders();
 		this->PreDestructor();
 	}
 
-	void ClearCoupledOrders();
+	void ClearHardOrders();
 
 	friend struct GroundVehicle<Train, VEH_TRAIN>; // GroundVehicle needs to use the acceleration functions defined at Train.
 

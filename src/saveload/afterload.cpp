@@ -3075,6 +3075,12 @@ bool AfterLoadGame()
 		}
 	}
 
+	/* sigiex 1.7: saved own orders of coupled parts become wagon groups with hard orders. */
+	if (IsSavegameVersionBefore(202)) {
+		extern void ConvertCoupledOrdersToGroups();
+		ConvertCoupledOrdersToGroups();
+	}
+
 	/* Road stops is 'only' updating some caches */
 	AfterLoadRoadStops();
 	AfterLoadLabelMaps();

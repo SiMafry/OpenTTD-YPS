@@ -34,6 +34,8 @@
 
 #include "safeguards.h"
 
+extern void TrainOrdersEditedByPlayer(Vehicle *v);
+
 /* DestinationID must be at least as large as every these below, because it can
  * be any of them
  */
@@ -775,7 +777,7 @@ uint GetOrderDistance(const Order *prev, const Order *cur, const Vehicle *v, int
  * @param text unused
  * @return the cost of this operation or an error
  */
-CommandCost CmdInsertOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+static CommandCost CmdInsertOrderImpl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	VehicleID veh          = GB(p1,  0, 20);
 	VehicleOrderID sel_ord = GB(p1, 20, 8);
@@ -1020,6 +1022,14 @@ CommandCost CmdInsertOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 	return CommandCost();
 }
 
+/** CmdInsertOrder; when the player changed the orders of a train that is just one wagon group, they are its own orders now. */
+CommandCost CmdInsertOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	CommandCost ret = CmdInsertOrderImpl(tile, flags, p1, p2, text);
+	if ((flags & DC_EXEC) && ret.Succeeded()) TrainOrdersEditedByPlayer(Vehicle::GetIfValid(GB(p1, 0, 20)));
+	return ret;
+}
+
 /**
  * Insert a new order but skip the validation.
  * @param v       The vehicle to insert the order to.
@@ -1113,7 +1123,7 @@ static CommandCost DecloneOrder(Vehicle *dst, DoCommandFlag flags)
  * @param text unused
  * @return the cost of this operation or an error
  */
-CommandCost CmdDeleteOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+static CommandCost CmdDeleteOrderImpl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	VehicleID veh_id = GB(p1, 0, 20);
 	VehicleOrderID sel_ord = GB(p2, 0, 8);
@@ -1136,6 +1146,14 @@ CommandCost CmdDeleteOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 	if (flags & DC_EXEC) DeleteOrder(v, sel_ord);
 	return CommandCost();
+}
+
+/** CmdDeleteOrder; when the player changed the orders of a train that is just one wagon group, they are its own orders now. */
+CommandCost CmdDeleteOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	CommandCost ret = CmdDeleteOrderImpl(tile, flags, p1, p2, text);
+	if ((flags & DC_EXEC) && ret.Succeeded()) TrainOrdersEditedByPlayer(Vehicle::GetIfValid(GB(p1, 0, 20)));
+	return ret;
 }
 
 /**
@@ -1267,7 +1285,7 @@ CommandCost CmdSkipToOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
  * @note The target order will move one place down in the orderlist
  *  if you move the order upwards else it'll move it one place down
  */
-CommandCost CmdMoveOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+static CommandCost CmdMoveOrderImpl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	VehicleID veh = GB(p1, 0, 20);
 	VehicleOrderID moving_order = GB(p2,  0, 16);
@@ -1363,6 +1381,14 @@ CommandCost CmdMoveOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
 	return CommandCost();
 }
 
+/** CmdMoveOrder; when the player changed the orders of a train that is just one wagon group, they are its own orders now. */
+CommandCost CmdMoveOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	CommandCost ret = CmdMoveOrderImpl(tile, flags, p1, p2, text);
+	if ((flags & DC_EXEC) && ret.Succeeded()) TrainOrdersEditedByPlayer(Vehicle::GetIfValid(GB(p1, 0, 20)));
+	return ret;
+}
+
 /**
  * Modify an order in the orderlist of a vehicle.
  * @param tile unused
@@ -1378,7 +1404,7 @@ CommandCost CmdMoveOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
  * @param text unused
  * @return the cost of this operation or an error
  */
-CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+static CommandCost CmdModifyOrderImpl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	VehicleOrderID sel_ord = GB(p1, 20,  8);
 	VehicleID veh          = GB(p1,  0, 20);
@@ -1721,6 +1747,14 @@ CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 	return CommandCost();
 }
 
+/** CmdModifyOrder; when the player changed the orders of a train that is just one wagon group, they are its own orders now. */
+CommandCost CmdModifyOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	CommandCost ret = CmdModifyOrderImpl(tile, flags, p1, p2, text);
+	if ((flags & DC_EXEC) && ret.Succeeded()) TrainOrdersEditedByPlayer(Vehicle::GetIfValid(GB(p1, 0, 20)));
+	return ret;
+}
+
 /**
  * Check if an aircraft has enough range for an order list.
  * @param v_new Aircraft to check.
@@ -1761,7 +1795,7 @@ static bool CheckAircraftOrderDistance(const Aircraft *v_new, const Vehicle *v_o
  * @param text unused
  * @return the cost of this operation or an error
  */
-CommandCost CmdCloneOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+static CommandCost CmdCloneOrderImpl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	VehicleID veh_src = GB(p2, 0, 20);
 	VehicleID veh_dst = GB(p1, 0, 20);
@@ -1899,6 +1933,14 @@ CommandCost CmdCloneOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32
 	}
 
 	return CommandCost();
+}
+
+/** CmdCloneOrder; when the player changed the orders of a train that is just one wagon group, they are its own orders now. */
+CommandCost CmdCloneOrder(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	CommandCost ret = CmdCloneOrderImpl(tile, flags, p1, p2, text);
+	if ((flags & DC_EXEC) && ret.Succeeded()) TrainOrdersEditedByPlayer(Vehicle::GetIfValid(GB(p1, 0, 20)));
+	return ret;
 }
 
 /**
@@ -2102,7 +2144,7 @@ restart:
 	/* Also in the saved own orders of coupled train parts. */
 	Train *t;
 	FOR_ALL_TRAINS(t) {
-		for (Order *o = t->drawer_orders; o != NULL; o = o->next) {
+		for (Order *o = t->hard_orders; o != NULL; o = o->next) {
 			OrderType ot = o->GetType();
 			if (ot == OT_GOTO_DEPOT && (o->GetDepotActionType() & ODATFB_NEAREST_DEPOT) != 0) continue;
 			if (ot == OT_IMPLICIT) ot = OT_GOTO_STATION;
