@@ -2902,10 +2902,8 @@ static bool RestoreHardOrders(Train *t, const Train *a, bool skip_wait = true)
 	Vehicle *share = Vehicle::GetIfValid(share_id);
 	bool can_share = share != NULL && share != t && share->type == VEH_TRAIN && share->IsPrimaryVehicle() &&
 			share->owner == t->owner && share->orders.list != NULL && OrdersMatchSaved(share, a->hard_orders);
-	if (!can_share) {
-		if (!Order::CanAllocateItem(num)) return false;
-		if (t->orders.list == NULL && !OrderList::CanAllocateItem()) return false;
-	}
+	/* The order list of the train is deleted below, so a new one is needed when not sharing. */
+	if (!can_share && (!Order::CanAllocateItem(num) || !OrderList::CanAllocateItem())) return false;
 
 	DeleteVehicleOrders(t, false, true);
 	t->current_order.Free();
