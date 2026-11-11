@@ -413,7 +413,12 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 
 		case OT_DECOUPLE: {
 			if (order->GetDecoupleSort()) {
-				SetDParam(0, order->GetDecoupleSortWait() ? STR_ORDER_DECOUPLE_SORT_WAIT_DETAILS : STR_ORDER_DECOUPLE_SORT_DETAILS);
+				if (order->HasCoupleCargoType()) {
+					SetDParam(0, order->GetDecoupleSortWait() ? STR_ORDER_DECOUPLE_SORT_WAIT_CARGO_DETAILS : STR_ORDER_DECOUPLE_SORT_CARGO_DETAILS);
+					SetDParam(1, CargoSpec::Get(order->GetCoupleCargoType())->name);
+				} else {
+					SetDParam(0, order->GetDecoupleSortWait() ? STR_ORDER_DECOUPLE_SORT_WAIT_DETAILS : STR_ORDER_DECOUPLE_SORT_DETAILS);
+				}
 				if (order->GetNumDecouple() > 0) {
 					SetDParam(5, STR_ORDER_SORT_MAX_LENGTH);
 					SetDParam(6, order->GetNumDecouple());
@@ -1234,6 +1239,8 @@ public:
 					this->SetWidgetDisabledState(WID_O_ORDERS_FIRST, order->GetDecoupleSort());
 					this->SetWidgetDisabledState(WID_O_ORDERS_SECOND, order->GetDecoupleSort());
 					this->GetWidget<NWidgetCore>(WID_O_DECOUPLE_VALUE)->widget_data = order->GetDecoupleSort() ? STR_ORDER_SORT_MAX_LENGTH_BUTTON : STR_ORDERS_DECOUPLE_VALUE_BUTTON;
+					this->SetWidgetDisabledState(WID_O_DECOUPLE_CARGO, !order->GetDecoupleSort());
+					this->SetWidgetLoweredState(WID_O_DECOUPLE_CARGO, order->GetDecoupleSort() && order->HasCoupleCargoType());
 					this->DisableWidget(WID_O_DECOUPLE);
 					this->DisableWidget(WID_O_DELETE);
 					break;
@@ -1529,6 +1536,7 @@ public:
 				break;
 
 			case WID_O_COUPLE_CARGO:
+			case WID_O_DECOUPLE_CARGO:
 				OrderClick_CoupleCargo();
 				break;
 
@@ -1899,6 +1907,8 @@ static const NWidgetPart _nested_orders_train_widgets[] = {
 															SetDataTip(STR_ORDERS_DECOUPLE_VALUE_BUTTON, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
 				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_O_DECOUPLE_SORT), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_ORDER_DECOUPLE_SORT_BUTTON, STR_ORDER_DECOUPLE_SORT_TOOLTIP), SetResize(1, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_DECOUPLE_CARGO), SetMinimalSize(93, 12), SetFill(1, 0),
+															SetDataTip(STR_ORDER_DECOUPLE_CARGO_BUTTON, STR_ORDER_DECOUPLE_CARGO_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 		EndContainer(),
 		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_O_SHARED_ORDER_LIST), SetMinimalSize(12, 12), SetDataTip(SPR_SHARED_ORDERS_ICON, STR_ORDERS_VEH_WITH_SHARED_ORDERS_LIST_TOOLTIP),

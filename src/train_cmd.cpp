@@ -4308,6 +4308,34 @@ static void RepairWaitingGroup(Train *g)
 }
 
 /**
+ * The cargo filter of the sort order of a train standing in a shunting yard.
+ * @param v Front of the train.
+ * @return The cargo wagon groups must carry to be taken along, or CT_INVALID for any cargo.
+ */
+static CargoID YardCargoFilter(const Train *v)
+{
+	const Order *o = v->GetOrder(v->cur_real_order_index + 1);
+	if (o == NULL || !o->IsType(OT_DECOUPLE) || !o->GetDecoupleSort() || !o->HasCoupleCargoType()) return CT_INVALID;
+	return o->GetCoupleCargoType();
+}
+
+/**
+ * Does a part of a train carry a cargo type (at least one of its vehicles)?
+ * @param first First vehicle of the part.
+ * @param last Last vehicle of the part, NULL for up to the end of the train.
+ * @param cargo The cargo type, CT_INVALID for any cargo (always true).
+ */
+static bool PartCarriesCargo(const Train *first, const Train *last, CargoID cargo)
+{
+	if (cargo == CT_INVALID) return true;
+	for (const Train *u = first; u != NULL; u = u->Next()) {
+		if (u->cargo_cap > 0 && u->cargo_type == cargo) return true;
+		if (u == last) break;
+	}
+	return false;
+}
+
+/**
  * The next station of a wagon group waiting in a yard depot.
  * @param g Front of the group.
  * @param yard The yard station (not counted).
@@ -4591,6 +4619,7 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	}
 
 	/* Decide which groups stay and cut the train apart. */
+	CargoID cargo_filter = YardCargoFilter(v);
 	std::vector<bool> keep(segments.size(), true);
 	for (size_t i = 1; i < segments.size(); i++) {
 		if (segments[i].anchor == NULL) continue; // not in a group: stays with the train
@@ -4600,7 +4629,7 @@ static Train *SortTrainInYard(Train *v, StationID station)
 		d->hard_impl_index = d->hard_real_index;
 		/* The saved position is the last place reached: look from the order after it. */
 		StationID dest = NextStationInSavedOrders(d->hard_orders, d->hard_real_index + 1, station);
-		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest);
+		keep[i] = (loco_dest != INVALID_STATION && dest == loco_dest) && PartCarriesCargo(segments[i].first, segments[i].last, cargo_filter);
 	}
 
 	/* Maximum length set in the order: leave groups (from the back) in the
@@ -4679,6 +4708,7 @@ static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, Platf
 	/* Maximum number of vehicles (units, like for decoupling) set in the order, 0: the platform decides. */
 	const Order *sort_order = v->GetOrder(v->cur_real_order_index + 1);
 	uint max_units = (sort_order != NULL && sort_order->IsType(OT_DECOUPLE) && sort_order->GetDecoupleSort()) ? sort_order->GetNumDecouple() : 0;
+	CargoID cargo_filter = YardCargoFilter(v);
 
 	std::vector<Train *> waiting;
 	Train *t;
@@ -4688,6 +4718,7 @@ static bool AddWaitingGroups(Train *v, StationID station, TileIndex depot, Platf
 		RepairWaitingGroup(t);
 		AdvanceGroupPosition(t, station);
 		if (WaitingGroupDestination(t, station) != loco_dest) continue;
+		if (!PartCarriesCargo(t, NULL, cargo_filter)) continue;
 		waiting.push_back(t);
 	}
 
@@ -4934,7 +4965,7 @@ static bool TryReleaseFromYardDepot(Train *v)
 			RepairWaitingGroup(t);
 			AdvanceGroupPosition(t, station);
 			if (max_units > 0 && CountVehiclesInVehicles(v) + CountVehiclesInVehicles(t) > max_units) continue;
-			if (WaitingGroupDestination(t, station) == loco_dest) {
+			if (WaitingGroupDestination(t, station) == loco_dest && PartCarriesCargo(t, NULL, YardCargoFilter(v))) {
 				have_load = true;
 				break;
 			}

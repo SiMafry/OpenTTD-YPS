@@ -1445,7 +1445,7 @@ static CommandCost CmdModifyOrderImpl(TileIndex tile, DoCommandFlag flags, uint3
 			break;
 
 		case OT_DECOUPLE:
-			if (mof != MOF_FIRST_ORDERS && mof != MOF_SECOND_ORDERS && mof != MOF_DECOUPLE_VALUE && mof != MOF_DECOUPLE_SORT) return CMD_ERROR;
+			if (mof != MOF_FIRST_ORDERS && mof != MOF_SECOND_ORDERS && mof != MOF_DECOUPLE_VALUE && mof != MOF_DECOUPLE_SORT && mof != MOF_COUPLE_CARGO) return CMD_ERROR;
 			break;
 
 		default:

@@ -3932,6 +3932,10 @@ STR_ORDER_DECOUPLE_SORT_BUTTON                                  :{BLACK}Rozřadi
 STR_ORDER_DECOUPLE_SORT_TOOLTIP                                 :{BLACK}Seřaďovací stanice: skupiny vozů, které nejedou tam co lokomotiva, se odstaví do depa vedle stanice a čekající skupiny pro cíl lokomotivy se připojí
 STR_ORDER_DECOUPLE_SORT_DETAILS                                 :[Rozřadit skupiny vozů]
 STR_ORDER_DECOUPLE_SORT_WAIT_DETAILS                            :[Rozřadit skupiny vozů, čekat na zátěž]
+STR_ORDER_DECOUPLE_SORT_CARGO_DETAILS                           :[Rozřadit skupiny vozů, jen náklad: {STRING}]
+STR_ORDER_DECOUPLE_SORT_WAIT_CARGO_DETAILS                      :[Rozřadit skupiny vozů, čekat na zátěž, jen náklad: {STRING}]
+STR_ORDER_DECOUPLE_CARGO_BUTTON                                 :{BLACK}Náklad
+STR_ORDER_DECOUPLE_CARGO_TOOLTIP                                :{BLACK}Rozřaďování: brát jen skupiny vozů, které vezou tento druh nákladu (a jedou tam co lokomotiva). Dalším kliknutím bez omezení
 STR_ORDER_SORT_OFF                                              :Nerozřazovat
 STR_ORDER_SORT_ON                                               :Rozřadit
 STR_ORDER_SORT_WAIT                                             :Rozřadit, čekat na zátěž

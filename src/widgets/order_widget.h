@@ -49,6 +49,7 @@ enum OrderWidgets {
 	WID_O_COUPLE_SAME_DEST,          ///< Toggle: couple only trains going to the same next station
 	WID_O_DECOUPLE_SORT,             ///< Toggle: sort the train in a shunting yard
 	WID_O_COUPLE_MAX_WAIT,           ///< Go to couple: give up after this many days
+	WID_O_DECOUPLE_CARGO,            ///< Sort: only wagon groups carrying a cargo type
 };
 
 #endif /* WIDGETS_ORDER_WIDGET_H */
