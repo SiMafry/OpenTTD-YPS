@@ -158,6 +158,7 @@ enum OrderConditionVariable {
 	OCV_REQUIRES_SERVICE,   ///< Skip when the vehicle requires service
 	OCV_UNCONDITIONALLY,    ///< Always skip
 	OCV_REMAINING_LIFETIME, ///< Skip based on the remaining lifetime
+	OCV_TRAIN_UNITS,        ///< Skip based on the number of vehicles (articulated vehicles count once)
 	OCV_END
 };
 

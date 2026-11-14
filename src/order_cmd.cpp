@@ -2280,6 +2280,13 @@ VehicleOrderID ProcessConditionalOrder(const Order *order, const Vehicle *v)
 		case OCV_REQUIRES_SERVICE:   skip_order = OrderConditionCompare(occ, v->NeedsServicing(),               value); break;
 		case OCV_UNCONDITIONALLY:    skip_order = true; break;
 		case OCV_REMAINING_LIFETIME: skip_order = OrderConditionCompare(occ, max(v->max_age - v->age + DAYS_IN_LEAP_YEAR - 1, 0) / DAYS_IN_LEAP_YEAR, value); break;
+		case OCV_TRAIN_UNITS: {
+			/* Count the vehicles like decoupling does: an articulated vehicle is one. */
+			uint units = 0;
+			for (const Vehicle *u = v; u != NULL; u = u->GetNextVehicle()) units++;
+			skip_order = OrderConditionCompare(occ, units, value);
+			break;
+		}
 		default: NOT_REACHED();
 	}
 

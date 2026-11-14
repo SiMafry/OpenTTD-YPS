@@ -190,6 +190,7 @@ static const OrderConditionVariable _order_conditional_variable[] = {
 	OCV_MAX_SPEED,
 	OCV_AGE,
 	OCV_REMAINING_LIFETIME,
+	OCV_TRAIN_UNITS,
 	OCV_REQUIRES_SERVICE,
 	OCV_UNCONDITIONALLY,
 };

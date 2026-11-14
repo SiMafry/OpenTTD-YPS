@@ -3893,6 +3893,7 @@ STR_ORDER_CONDITIONAL_AGE                                       :Stáří vozidl
 STR_ORDER_CONDITIONAL_REQUIRES_SERVICE                          :Vyžaduje údržbu
 STR_ORDER_CONDITIONAL_UNCONDITIONALLY                           :Vždy
 STR_ORDER_CONDITIONAL_REMAINING_LIFETIME                        :Zbývající životnost (v letech)
+STR_ORDER_CONDITIONAL_TRAIN_UNITS                               :Počet vozidel
 
 STR_ORDER_CONDITIONAL_COMPARATOR_TOOLTIP                        :{BLACK}Jak porovnat vlastnost vozidla se zadanou hodnotou
 STR_ORDER_CONDITIONAL_COMPARATOR_EQUALS                         :se rovná
