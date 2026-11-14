@@ -6467,6 +6467,45 @@ static Vehicle *OtherTrainOnTrackEnum(Vehicle *v, void *data)
 }
 
 /**
+ * A train led by its locomotive that just sorted in a shunting yard turns
+ * around by running around (the locomotive goes to the other end), not by
+ * flipping the whole train, which would leave it pushed.
+ * @param v Front of the train, about to turn around.
+ * @return true to run around.
+ */
+static bool RunAroundInYard(const Train *v)
+{
+	if (!v->IsEngine() || v->Next() == NULL || !IsRailStationTile(v->tile)) return false;
+	StationID station = GetStationIndex(v->tile);
+	const Station *st = Station::GetIfValid(station);
+	if (st == NULL || FindYardDepot(st, v) == INVALID_TILE) return false;
+
+	/* Sorted here: a sort decouple order right after the stop at this station, before the current order. */
+	int num = v->GetNumOrders();
+	if (num < 2) return false;
+	VehicleOrderID i = v->cur_real_order_index;
+	/* Still at the stop itself, with the sort order next. */
+	const Order *cur = v->GetOrder(i);
+	const Order *next = v->GetOrder((i + 1) % num);
+	if (cur != NULL && next != NULL && cur->IsType(OT_GOTO_STATION) && cur->GetDestination() == station &&
+			next->IsType(OT_DECOUPLE) && next->GetDecoupleSort()) return true;
+	for (int k = 0; k < 4; k++) {
+		i = (i == 0) ? num - 1 : i - 1;
+		const Order *o = v->GetOrder(i);
+		if (o == NULL) return false;
+		if (o->IsType(OT_IMPLICIT)) continue;
+		if (o->IsType(OT_DECOUPLE)) {
+			if (!o->GetDecoupleSort()) return false;
+			VehicleOrderID j = (i == 0) ? num - 1 : i - 1;
+			const Order *prev = v->GetOrder(j);
+			return prev != NULL && prev->IsType(OT_GOTO_STATION) && prev->GetDestination() == station;
+		}
+		if (!o->IsType(OT_REVERSE)) return false;
+	}
+	return false;
+}
+
+/**
  * Is there another train on the track between this train and the next signal
  * in front of it? Used before starting, so the second part of a decoupled
  * train waits until the first part has passed the next signal.
@@ -6569,7 +6608,7 @@ static bool TrainLocoHandler(Train *v, bool mode)
 
 	if (HasBit(v->flags, VRF_REVERSING) && v->cur_speed == 0) {
 		if (!mode) return true;
-		ReverseTrainDirection(v);
+		ReverseTrainDirection(v, RunAroundInYard(v));
 		return true;
 	}
 
