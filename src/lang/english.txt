@@ -852,6 +852,7 @@ STR_NEWS_VEHICLE_IS_GETTING_VERY_OLD                            :{WHITE}{VEHICLE
 STR_NEWS_VEHICLE_IS_GETTING_VERY_OLD_AND                        :{WHITE}{VEHICLE} is getting very old and urgently needs replacing
 STR_NEWS_TRAIN_IS_STUCK                                         :{WHITE}{VEHICLE} can't find a path to continue
 STR_NEWS_VEHICLE_IS_LOST                                        :{WHITE}{VEHICLE} is lost
+STR_NEWS_TRAIN_IS_PUSHED                                        :{WHITE}{VEHICLE} runs pushed (no locomotive in front) for {COMMA} day{P "" s}
 STR_NEWS_VEHICLE_IS_UNPROFITABLE                                :{WHITE}{VEHICLE}'s profit last year was {CURRENCY_LONG}
 STR_NEWS_AIRCRAFT_DEST_TOO_FAR                                  :{WHITE}{VEHICLE} can't get to the next destination because it is out of range
 
@@ -1263,6 +1264,10 @@ STR_CONFIG_SETTING_NEVER_EXPIRE_AIRPORTS_HELPTEXT               :Enabling this s
 
 STR_CONFIG_SETTING_WARN_LOST_VEHICLE                            :Warn if vehicle is lost: {STRING2}
 STR_CONFIG_SETTING_WARN_LOST_VEHICLE_HELPTEXT                   :Trigger messages about vehicles unable to find a path to their ordered destination
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN                            :Warn if a train runs pushed for too long: {STRING2}
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN_HELPTEXT                   :Trigger a message (advice news) when a train runs pushed - no locomotive at its front - for this many days in a row. Days when the train only stands still are not counted. The count starts again when a locomotive is at the front
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN_VALUE                      :{COMMA} day{P 0 "" s}
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN_DISABLED                   :Disabled
 STR_CONFIG_SETTING_ORDER_REVIEW                                 :Review vehicles' orders: {STRING2}
 STR_CONFIG_SETTING_ORDER_REVIEW_HELPTEXT                        :When enabled, the orders of the vehicles are periodically checked, and some obvious issues are reported with a news message when detected
 STR_CONFIG_SETTING_ORDER_REVIEW_OFF                             :No

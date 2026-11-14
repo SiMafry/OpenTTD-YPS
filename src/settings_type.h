@@ -84,6 +84,7 @@ enum ViewportScrollMode {
 struct GUISettings {
 	bool   sg_full_load_any;                 ///< new full load calculation, any cargo must be full read from pre v93 savegames
 	bool   lost_vehicle_warn;                ///< if a vehicle can't find its destination, show a warning
+	uint16 pushed_train_warn_days;           ///< warn when a train runs pushed (no locomotive in front) for this many days, 0 = off
 	uint8  order_review_system;              ///< perform order reviews on vehicles
 	bool   vehicle_income_warn;              ///< if a vehicle isn't generating income, show a warning
 	bool   show_finances;                    ///< show finances at end of year

@@ -6770,6 +6770,7 @@ bool Train::Tick()
 
 	if (this->IsPrimaryVehicle()) {
 		if (!(this->vehstatus & VS_STOPPED) || this->cur_speed > 0) this->running_ticks++;
+		if (this->cur_speed > 0 && !this->IsEngine()) this->pushed_moved = true;
 
 		this->current_order_time++;
 
@@ -6836,6 +6837,40 @@ static void CheckIfTrainNeedsService(Train *v)
 }
 
 /** Update day counters of the train vehicle. */
+/**
+ * Daily check of a train running pushed (a wagon in front, a locomotive somewhere behind).
+ * Only days on which it moved count; a locomotive in front starts the count again.
+ * @param v Front of the train.
+ */
+static void CheckPushedTrain(Train *v)
+{
+	bool pushed = !v->IsEngine();
+	if (pushed) {
+		pushed = false;
+		for (const Train *u = v->Next(); u != NULL; u = u->Next()) {
+			if (u->IsEngine()) {
+				pushed = true;
+				break;
+			}
+		}
+	}
+	if (!pushed) {
+		v->pushed_days = 0;
+		v->pushed_warned = false;
+		v->pushed_moved = false;
+		return;
+	}
+	if (v->pushed_moved && v->pushed_days < UINT16_MAX) v->pushed_days++;
+	v->pushed_moved = false;
+
+	uint16 limit = _settings_client.gui.pushed_train_warn_days;
+	if (limit == 0 || v->pushed_warned || v->pushed_days < limit || v->owner != _local_company) return;
+	v->pushed_warned = true;
+	SetDParam(0, v->index);
+	SetDParam(1, v->pushed_days);
+	AddVehicleAdviceNewsItem(STR_NEWS_TRAIN_IS_PUSHED, v->index);
+}
+
 void Train::OnNewDay()
 {
 	AgeVehicle(this);
@@ -6843,6 +6878,8 @@ void Train::OnNewDay()
 	if ((++this->day_counter & 7) == 0) DecreaseVehicleValue(this);
 
 	if (this->IsPrimaryVehicle()) {
+		CheckPushedTrain(this);
+
 		CheckVehicleBreakdown(this);
 
 		CheckIfTrainNeedsService(this);

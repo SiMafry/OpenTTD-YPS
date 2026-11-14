@@ -126,6 +126,9 @@ struct Train FINAL : public GroundVehicle<Train, VEH_TRAIN> {
 	 * train itself are a working copy, filled from these at decoupling/sorting.
 	 */
 	VehicleID group_anchor;            ///< Anchor of the wagon group this vehicle belongs to, INVALID_VEHICLE if none.
+	uint16 pushed_days;                ///< Days in a row this train ran pushed (not saved).
+	bool pushed_moved;                 ///< This train moved pushed today (not saved).
+	bool pushed_warned;                ///< The pushed warning was shown for this run (not saved).
 	Order *hard_orders;                ///< On the anchor: the group's own orders, NULL otherwise.
 	VehicleID hard_share_with;         ///< On the anchor: a vehicle that shared these orders, INVALID_VEHICLE if none.
 	VehicleOrderID hard_real_index;    ///< On the anchor: last place reached in the own orders.

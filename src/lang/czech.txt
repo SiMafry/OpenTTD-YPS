@@ -935,6 +935,7 @@ STR_NEWS_VEHICLE_IS_GETTING_VERY_OLD                            :{WHITE}{VEHICLE
 STR_NEWS_VEHICLE_IS_GETTING_VERY_OLD_AND                        :{WHITE}{VEHICLE} silně zastarává a nutně potřebuje nahradit
 STR_NEWS_TRAIN_IS_STUCK                                         :{WHITE}{VEHICLE} nemůže najít cestu
 STR_NEWS_VEHICLE_IS_LOST                                        :{WHITE}{VEHICLE} se ztratil{G 0 "" a o i y y a}
+STR_NEWS_TRAIN_IS_PUSHED                                        :{WHITE}{VEHICLE} jede sunutý (vpředu není lokomotiva) už {COMMA} {P den dny dní}
 STR_NEWS_VEHICLE_IS_UNPROFITABLE                                :{WHITE}{VEHICLE} - loňský zisk {CURRENCY_LONG}
 STR_NEWS_AIRCRAFT_DEST_TOO_FAR                                  :{WHITE}{VEHICLE} se nemůže dostat do dalšího cíle, protože je mimo dosah
 
@@ -1343,6 +1344,10 @@ STR_CONFIG_SETTING_NEVER_EXPIRE_AIRPORTS_HELPTEXT               :Povolení této
 
 STR_CONFIG_SETTING_WARN_LOST_VEHICLE                            :Varovat pokud se ztratí vozidlo: {STRING}
 STR_CONFIG_SETTING_WARN_LOST_VEHICLE_HELPTEXT                   :Zapne zobrazování zpráv o vozidlech, která nemohou najít cestu do cíle.
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN                            :Varovat, pokud vlak jede dlouho sunutý: {STRING}
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN_HELPTEXT                   :Zobrazí zprávu (rady k vozidlům), když vlak jede sunutý - vpředu není lokomotiva - tolik dní v kuse. Dny, kdy vlak jen stojí, se nepočítají. Když je vpředu zase lokomotiva, počítá se znovu od nuly.
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN_VALUE                      :{COMMA} {P den dny dní}
+STR_CONFIG_SETTING_WARN_PUSHED_TRAIN_DISABLED                   :Vypnuto
 STR_CONFIG_SETTING_ORDER_REVIEW                                 :Kontrolovat příkazy vozidel: {STRING}
 STR_CONFIG_SETTING_ORDER_REVIEW_HELPTEXT                        :Pokud je zapnuto, příkazy vozidel jsou pravidelně kontrolovány a určité problémy jsou hlášeny pomocí informačních zpráv.
 STR_CONFIG_SETTING_ORDER_REVIEW_OFF                             :Ne
