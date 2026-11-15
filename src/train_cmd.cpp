@@ -6095,14 +6095,14 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	 * the waiting one at its 'wait for couple'). */
 	PrepareGroupsForCouple(v);
 	PrepareGroupsForCouple(u);
-	v->IncrementImplicitOrderIndex();
-	ProcessOrders(v);
 	ReverseTrainDirection(v);
 	v = v->First();
 
 	Train *v_last = v->Last();
 	
 	if (!TryTrainCouple(v, u)) {
+		v->IncrementImplicitOrderIndex();
+		ProcessOrders(v);
 		if (v->owner == _local_company) {
 			SetDParam(0, v->index);
 			SetDParam(1, u->index);
@@ -6140,6 +6140,12 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	NormaliseTrainHead(v, CCF_ARRANGE_STATION);
 	
 	AdvanceWagonsAfterCouple(v_last);
+
+	/* Go on with the next order only now: conditional orders right after the
+	 * 'go to couple' must see the coupled train (e.g. its number of vehicles). */
+	v->IncrementImplicitOrderIndex();
+	ProcessOrders(v);
+
 	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
 	if (CheckReverseTrain(v)) SetBit(v->flags, VRF_REVERSING);
 }
