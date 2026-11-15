@@ -171,6 +171,12 @@ public:
 	inline VehicleOrderID GetConditionSkipToOrder() const { return this->flags; }
 	/** Get the value to base the skip on. */
 	inline uint16 GetConditionValue() const { return GB(this->dest, 0, 11); }
+
+	/**
+	 * Station of a 'free platforms' condition (kept in the speed limit field, unused by conditional orders).
+	 * @return the station, INVALID_STATION if none.
+	 */
+	inline StationID GetConditionStation() const { return this->max_speed; }
 	/** Are we going to decouple? */
 	inline OrderDecoupleFlags GetDecouple() const { return (OrderDecoupleFlags)GB(this->decouple_flags, 0, 1); }
 	/** How many wagons are we keeping */
@@ -212,6 +218,9 @@ public:
 	inline void SetConditionSkipToOrder(VehicleOrderID order_id) { this->flags = order_id; }
 	/** Set the value to base the skip on. */
 	inline void SetConditionValue(uint16 value) { SB(this->dest, 0, 11, value); }
+
+	/** Set the station of a 'free platforms' condition. */
+	inline void SetConditionStation(StationID station) { this->max_speed = station; }
 	/** Set wheter we must decople or not */
 	inline void SetDecouple(uint8 value) { SB(this->decouple_flags, 0, 1, value); }
 	/** Set how many units to keep */

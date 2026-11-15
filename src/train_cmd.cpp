@@ -4868,6 +4868,34 @@ static void EnterYardDepot(Train *v, StationID station, TileIndex depot)
 }
 
 /**
+ * Number of free platforms in a station: no train on them and nothing reserved.
+ * @param station The station (INVALID_STATION or not a rail station: 0).
+ * @return The number of free platforms.
+ */
+uint CountFreePlatforms(StationID station)
+{
+	const Station *st = Station::GetIfValid(station);
+	if (st == NULL || st->train_station.tile == INVALID_TILE) return 0;
+	uint count = 0;
+	TILE_AREA_LOOP(tile, st->train_station) {
+		if (!IsRailStationTile(tile) || GetStationIndex(tile) != station) continue;
+		DiagDirection d = AxisToDiagDir(GetRailStationAxis(tile));
+		TileIndex prev = TileAddByDiagDir(tile, ReverseDiagDir(d));
+		if (IsValidTile(prev) && IsCompatibleTrainStationTile(prev, tile)) continue; // not the start of a platform
+
+		bool free = true;
+		for (TileIndex t = tile; IsValidTile(t) && IsCompatibleTrainStationTile(t, tile); t = TileAddByDiagDir(t, d)) {
+			if (HasStationReservation(t) || HasVehicleOnPos(t, NULL, &TrainOnTileEnum)) {
+				free = false;
+				break;
+			}
+		}
+		if (free) count++;
+	}
+	return count;
+}
+
+/**
  * Find a free platform in a station: no train on it and nothing reserved.
  * @param station The station.
  * @param length Required length in pixels.

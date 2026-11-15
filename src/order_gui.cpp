@@ -191,6 +191,7 @@ static const OrderConditionVariable _order_conditional_variable[] = {
 	OCV_AGE,
 	OCV_REMAINING_LIFETIME,
 	OCV_TRAIN_UNITS,
+	OCV_FREE_PLATFORMS,
 	OCV_REQUIRES_SERVICE,
 	OCV_UNCONDITIONALLY,
 };
@@ -371,6 +372,17 @@ void DrawOrderString(const Vehicle *v, const Order *order, int order_index, int 
 				uint value = order->GetConditionValue();
 				if (order->GetConditionVariable() == OCV_MAX_SPEED) value = ConvertSpeedToDisplaySpeed(value);
 				SetDParam(4, value);
+
+				if (order->GetConditionVariable() == OCV_FREE_PLATFORMS) {
+					if (Station::IsValidID(order->GetConditionStation())) {
+						SetDParam(0, STR_ORDER_CONDITIONAL_FREE_PLATFORMS_NUM);
+						SetDParam(2, order->GetConditionStation());
+					} else {
+						SetDParam(0, STR_ORDER_CONDITIONAL_FREE_PLATFORMS_NO_STATION);
+						SetDParam(2, STR_ORDER_CONDITIONAL_COMPARATOR_EQUALS + occ);
+						SetDParam(3, value);
+					}
+				}
 			}
 
 			if (timetable && order->GetWaitTime() > 0) {
@@ -569,6 +581,7 @@ private:
 		OPOS_GOTO,
 		OPOS_CONDITIONAL,
 		OPOS_SHARE,
+		OPOS_COND_STATION,
 		OPOS_END,
 	};
 
@@ -654,6 +667,7 @@ private:
 			HT_RECT | HT_VEHICLE, // OPOS_GOTO
 			HT_NONE,              // OPOS_CONDITIONAL
 			HT_VEHICLE,           // OPOS_SHARE
+			HT_RECT,              // OPOS_COND_STATION
 		};
 		SetObjectToPlaceWnd(ANIMCURSOR_PICKSTATION, PAL_NONE, goto_place_style[type - 1], this);
 		this->goto_type = type;
@@ -1218,6 +1232,10 @@ public:
 					this->GetWidget<NWidgetCore>(WID_O_COND_COMPARATOR)->widget_data = _order_conditional_condition[order->GetConditionComparator()];
 					this->SetWidgetDisabledState(WID_O_COND_COMPARATOR, ocv == OCV_UNCONDITIONALLY);
 					this->SetWidgetDisabledState(WID_O_COND_VALUE, ocv == OCV_REQUIRES_SERVICE || ocv == OCV_UNCONDITIONALLY);
+					if (this->vehicle->type == VEH_TRAIN) {
+						this->SetWidgetDisabledState(WID_O_COND_STATION, ocv != OCV_FREE_PLATFORMS);
+						this->SetWidgetLoweredState(WID_O_COND_STATION, this->goto_type == OPOS_COND_STATION);
+					}
 					break;
 				}
 				
@@ -1276,7 +1294,8 @@ public:
 		if (this->vehicle->owner != _local_company) {
 			this->selected_order = -1; // Disable selection any selected row at a competitor order window.
 		} else {
-			this->SetWidgetLoweredState(WID_O_GOTO, this->goto_type != OPOS_NONE);
+			this->SetWidgetLoweredState(WID_O_GOTO, this->goto_type != OPOS_NONE && this->goto_type != OPOS_COND_STATION);
+			if (this->vehicle->type == VEH_TRAIN) this->SetWidgetLoweredState(WID_O_COND_STATION, this->goto_type == OPOS_COND_STATION);
 		}
 		this->DrawWidgets();
 	}
@@ -1449,6 +1468,7 @@ public:
 						case OPOS_GOTO:        sel =  0; break;
 						case OPOS_CONDITIONAL: sel =  2; break;
 						case OPOS_SHARE:       sel =  3; break;
+						case OPOS_COND_STATION: sel = -1; break;
 						default: NOT_REACHED();
 					}
 					ShowDropDownMenu(this, this->vehicle->type == VEH_AIRCRAFT ? _order_goto_dropdown_aircraft :
@@ -1499,6 +1519,7 @@ public:
 			case WID_O_COND_VARIABLE: {
 				DropDownList *list = new DropDownList();
 				for (uint i = 0; i < lengthof(_order_conditional_variable); i++) {
+					if (_order_conditional_variable[i] == OCV_FREE_PLATFORMS && this->vehicle->type != VEH_TRAIN) continue;
 					*list->Append() = new DropDownListStringItem(STR_ORDER_CONDITIONAL_LOAD_PERCENTAGE + _order_conditional_variable[i], _order_conditional_variable[i], false);
 				}
 				ShowDropDownList(this, list, this->vehicle->GetOrder(this->OrderGetSel())->GetConditionVariable(), WID_O_COND_VARIABLE);
@@ -1510,6 +1531,16 @@ public:
 				ShowDropDownMenu(this, _order_conditional_condition, o->GetConditionComparator(), WID_O_COND_COMPARATOR, 0, (o->GetConditionVariable() == OCV_REQUIRES_SERVICE) ? 0x3F : 0xC0);
 				break;
 			}
+
+			case WID_O_COND_STATION:
+				if (this->goto_type == OPOS_COND_STATION) {
+					ResetObjectToPlace();
+				} else {
+					this->OrderClick_Goto(OPOS_COND_STATION);
+					this->SetWidgetLoweredState(WID_O_COND_STATION, true);
+					this->SetWidgetDirty(WID_O_COND_STATION);
+				}
+				break;
 
 			case WID_O_COND_VALUE: {
 				const Order *order = this->vehicle->GetOrder(this->OrderGetSel());
@@ -1753,6 +1784,19 @@ public:
 
 	virtual void OnPlaceObject(Point pt, TileIndex tile)
 	{
+		if (this->goto_type == OPOS_COND_STATION) {
+			if (!IsTileType(tile, MP_STATION) || !HasStationRail(tile)) return;
+			VehicleOrderID sel = this->OrderGetSel();
+			const Order *order = this->vehicle->GetOrder(sel);
+			if (order == NULL || !order->IsType(OT_CONDITIONAL)) {
+				ResetObjectToPlace();
+				return;
+			}
+			if (DoCommandP(this->vehicle->tile, this->vehicle->index + (sel << 20), MOF_COND_STATION | (uint32)GetStationIndex(tile) << 8, CMD_MODIFY_ORDER | CMD_MSG(STR_ERROR_CAN_T_MODIFY_THIS_ORDER))) {
+				ResetObjectToPlace();
+			}
+			return;
+		}
 		if (this->goto_type == OPOS_GOTO) {
 			const Order cmd = GetOrderCmdFromTile(this->vehicle, tile);
 			if (cmd.IsType(OT_NOTHING)) return;
@@ -1880,12 +1924,14 @@ static const NWidgetPart _nested_orders_train_widgets[] = {
 				EndContainer(),
 			EndContainer(),
 			NWidget(NWID_HORIZONTAL, NC_EQUALSIZE),
-				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_O_COND_VARIABLE), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_O_COND_VARIABLE), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_NULL, STR_ORDER_CONDITIONAL_VARIABLE_TOOLTIP), SetResize(1, 0),
-				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_O_COND_COMPARATOR), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_O_COND_COMPARATOR), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_NULL, STR_ORDER_CONDITIONAL_COMPARATOR_TOOLTIP), SetResize(1, 0),
-				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_COND_VALUE), SetMinimalSize(124, 12), SetFill(1, 0),
+				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_O_COND_VALUE), SetMinimalSize(93, 12), SetFill(1, 0),
 															SetDataTip(STR_BLACK_COMMA, STR_ORDER_CONDITIONAL_VALUE_TOOLTIP), SetResize(1, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_O_COND_STATION), SetMinimalSize(93, 12), SetFill(1, 0),
+															SetDataTip(STR_ORDER_CONDITIONAL_STATION_BUTTON, STR_ORDER_CONDITIONAL_STATION_TOOLTIP), SetResize(1, 0),
 			EndContainer(),
 			NWidget(NWID_HORIZONTAL, NC_EQUALSIZE),
 				NWidget(NWID_BUTTON_DROPDOWN, COLOUR_GREY, WID_O_COUPLE_LOAD), SetMinimalSize(93, 12), SetFill(1, 0),

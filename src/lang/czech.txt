@@ -3894,6 +3894,7 @@ STR_ORDER_CONDITIONAL_REQUIRES_SERVICE                          :Vyžaduje údr�
 STR_ORDER_CONDITIONAL_UNCONDITIONALLY                           :Vždy
 STR_ORDER_CONDITIONAL_REMAINING_LIFETIME                        :Zbývající životnost (v letech)
 STR_ORDER_CONDITIONAL_TRAIN_UNITS                               :Počet vozidel
+STR_ORDER_CONDITIONAL_FREE_PLATFORMS                            :Volné koleje ve stanici
 
 STR_ORDER_CONDITIONAL_COMPARATOR_TOOLTIP                        :{BLACK}Jak porovnat vlastnost vozidla se zadanou hodnotou
 STR_ORDER_CONDITIONAL_COMPARATOR_EQUALS                         :se rovná
@@ -4015,6 +4016,10 @@ STR_ORDER_STOP_LOCATION_FAR_END                                 :[na konci]
 STR_ORDER_OUT_OF_RANGE                                          :{RED} (Další cíl je mimo dosah)
 
 STR_ORDER_CONDITIONAL_UNCONDITIONAL                             :Skočit na příkaz {COMMA}
+STR_ORDER_CONDITIONAL_FREE_PLATFORMS_NUM                        :Skočit na příkaz {COMMA}, pokud volné koleje v {STATION} {STRING} {COMMA}
+STR_ORDER_CONDITIONAL_FREE_PLATFORMS_NO_STATION                 :Skočit na příkaz {COMMA}, pokud volné koleje v (nevybraná stanice) {STRING} {COMMA}
+STR_ORDER_CONDITIONAL_STATION_BUTTON                            :{BLACK}Stanice
+STR_ORDER_CONDITIONAL_STATION_TOOLTIP                           :{BLACK}Vyber stanici, jejíž volné koleje se počítají: klikni sem a pak na stanici v mapě
 STR_ORDER_CONDITIONAL_NUM                                       :Skočit na příkaz {COMMA}, když {STRING.small} {STRING} {COMMA}
 STR_ORDER_CONDITIONAL_TRUE_FALSE                                :Skočit na příkaz {COMMA}, když {STRING.small} {STRING}
 

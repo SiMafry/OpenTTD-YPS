@@ -229,6 +229,8 @@ bool Order::Equals(const Order &other) const
 				(this->GetDepotActionType() & ~ODATFB_NEAREST_DEPOT) == (other.GetDepotActionType() & ~ODATFB_NEAREST_DEPOT);
 	}
 
+	if (this->IsType(OT_CONDITIONAL) && this->type == other.type && this->GetConditionVariable() == OCV_FREE_PLATFORMS &&
+			this->GetConditionStation() != other.GetConditionStation()) return false;
 	return this->type == other.type && this->flags == other.flags && this->dest == other.dest;
 }
 
@@ -1437,7 +1439,7 @@ static CommandCost CmdModifyOrderImpl(TileIndex tile, DoCommandFlag flags, uint3
 			break;
 
 		case OT_CONDITIONAL:
-			if (mof != MOF_COND_VARIABLE && mof != MOF_COND_COMPARATOR && mof != MOF_COND_VALUE && mof != MOF_COND_DESTINATION) return CMD_ERROR;
+			if (mof != MOF_COND_VARIABLE && mof != MOF_COND_COMPARATOR && mof != MOF_COND_VALUE && mof != MOF_COND_DESTINATION && mof != MOF_COND_STATION) return CMD_ERROR;
 			break;
 			
 		case OT_GOTO_COUPLE:
@@ -1452,8 +1454,20 @@ static CommandCost CmdModifyOrderImpl(TileIndex tile, DoCommandFlag flags, uint3
 			return CMD_ERROR;
 	}
 
+	if (mof == MOF_COND_STATION) data = GB(p2, 8, 16);
+
 	switch (mof) {
 		default: NOT_REACHED();
+
+		case MOF_COND_STATION: {
+			const Station *st = Station::GetIfValid(data);
+			if (st == NULL || !(st->facilities & FACIL_TRAIN)) return CMD_ERROR;
+			if (st->owner != OWNER_NONE) {
+				CommandCost ret = CheckOwnership(st->owner);
+				if (ret.Failed()) return ret;
+			}
+			break;
+		}
 
 		case MOF_SECOND_ORDERS:
 		case MOF_FIRST_ORDERS:
@@ -1628,6 +1642,11 @@ static CommandCost CmdModifyOrderImpl(TileIndex tile, DoCommandFlag flags, uint3
 						order->SetConditionValue(0);
 						break;
 
+					case OCV_FREE_PLATFORMS:
+						if (occ == OCC_IS_TRUE || occ == OCC_IS_FALSE) order->SetConditionComparator(OCC_MORE_EQUALS);
+						if (order->GetConditionValue() == 0) order->SetConditionValue(1);
+						break;
+
 					case OCV_LOAD_PERCENTAGE:
 					case OCV_RELIABILITY:
 						if (order->GetConditionValue() > 100) order->SetConditionValue(100);
@@ -1650,6 +1669,10 @@ static CommandCost CmdModifyOrderImpl(TileIndex tile, DoCommandFlag flags, uint3
 
 			case MOF_COND_DESTINATION:
 				order->SetConditionSkipToOrder(data);
+				break;
+
+			case MOF_COND_STATION:
+				order->SetConditionStation(data);
 				break;
 				
 			case MOF_DECOUPLE_VALUE:
@@ -2280,6 +2303,11 @@ VehicleOrderID ProcessConditionalOrder(const Order *order, const Vehicle *v)
 		case OCV_REQUIRES_SERVICE:   skip_order = OrderConditionCompare(occ, v->NeedsServicing(),               value); break;
 		case OCV_UNCONDITIONALLY:    skip_order = true; break;
 		case OCV_REMAINING_LIFETIME: skip_order = OrderConditionCompare(occ, max(v->max_age - v->age + DAYS_IN_LEAP_YEAR - 1, 0) / DAYS_IN_LEAP_YEAR, value); break;
+		case OCV_FREE_PLATFORMS: {
+			extern uint CountFreePlatforms(StationID station);
+			skip_order = OrderConditionCompare(occ, CountFreePlatforms(order->GetConditionStation()), value);
+			break;
+		}
 		case OCV_TRAIN_UNITS: {
 			/* Count the vehicles like decoupling does: an articulated vehicle is one. */
 			uint units = 0;

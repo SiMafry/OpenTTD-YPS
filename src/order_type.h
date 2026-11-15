@@ -159,6 +159,7 @@ enum OrderConditionVariable {
 	OCV_UNCONDITIONALLY,    ///< Always skip
 	OCV_REMAINING_LIFETIME, ///< Skip based on the remaining lifetime
 	OCV_TRAIN_UNITS,        ///< Skip based on the number of vehicles (articulated vehicles count once)
+	OCV_FREE_PLATFORMS,     ///< Skip based on the number of free platforms in a station
 	OCV_END
 };
 
@@ -201,6 +202,7 @@ enum ModifyOrderFlags {
 	MOF_COUPLE_SAME_DEST,///< Toggle: couple only trains going to the same next station.
 	MOF_DECOUPLE_SORT,   ///< Toggle: sort the train in a shunting yard.
 	MOF_COUPLE_MAX_WAIT, ///< Go to couple: give up after this many days.
+	MOF_COND_STATION,    ///< Conditional order: the station whose free platforms are counted.
 	MOF_END
 };
 template <> struct EnumPropsT<ModifyOrderFlags> : MakeEnumPropsT<ModifyOrderFlags, byte, MOF_NON_STOP, MOF_END, MOF_END, 8> {};
