@@ -5999,6 +5999,29 @@ static TileIndex TrainApproachingCrossingTile(const Train *v)
 
 
 /**
+ * Reserve a path again for a train standing still (as after reversing).
+ * @param v Front of the train.
+ */
+static void ReservePathAfterCouple(Train *v)
+{
+	DiagDirection dir = TrainExitDir(v->direction, v->track);
+	if (IsRailDepotTile(v->tile) || IsTileType(v->tile, MP_TUNNELBRIDGE)) dir = INVALID_DIAGDIR;
+
+	if (UpdateSignalsOnSegment(v->tile, dir, v->owner) == SIGSEG_PBS || _settings_game.pf.reserve_paths) {
+		bool first_tile_okay = !(IsTileType(v->tile, MP_RAILWAY) &&
+			HasSignalOnTrackdir(v->tile, v->GetVehicleTrackdir()) &&
+			!IsPbsSignal(GetSignalType(v->tile, FindFirstTrack(v->track))));
+		if (IsRailDepotTile(v->tile) && TrackdirToExitdir(v->GetVehicleTrackdir()) == GetRailDepotDirection(v->tile)) first_tile_okay = false;
+		if (IsRailStationTile(v->tile)) SetRailStationPlatformReservation(v->tile, TrackdirToExitdir(v->GetVehicleTrackdir()), true);
+		if (TryPathReserve(v, false, first_tile_okay)) {
+			CheckNextTrainTile(v);
+		} else if (v->current_order.GetType() != OT_LOADING) {
+			MarkTrainAsStuck(v);
+		}
+	}
+}
+
+/**
  * Checks for line end. Also, bars crossing at next tile if needed
  *
  * @param v vehicle we are checking
@@ -6095,14 +6118,17 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	 * the waiting one at its 'wait for couple'). */
 	PrepareGroupsForCouple(v);
 	PrepareGroupsForCouple(u);
+	/* The order after the 'go to couple'; when it is a conditional order, it is
+	 * evaluated again once the trains are joined (it may count their vehicles). */
+	VehicleOrderID after_couple = v->GetNumOrders() > 0 ? (v->cur_real_order_index + 1) % v->GetNumOrders() : INVALID_VEH_ORDER_ID;
+	v->IncrementImplicitOrderIndex();
+	ProcessOrders(v);
 	ReverseTrainDirection(v);
 	v = v->First();
 
 	Train *v_last = v->Last();
 	
 	if (!TryTrainCouple(v, u)) {
-		v->IncrementImplicitOrderIndex();
-		ProcessOrders(v);
 		if (v->owner == _local_company) {
 			SetDParam(0, v->index);
 			SetDParam(1, u->index);
@@ -6141,10 +6167,17 @@ static void Couple(Train *v, Train *u, bool train_u_reversed)
 	
 	AdvanceWagonsAfterCouple(v_last);
 
-	/* Go on with the next order only now: conditional orders right after the
-	 * 'go to couple' must see the coupled train (e.g. its number of vehicles). */
-	v->IncrementImplicitOrderIndex();
-	ProcessOrders(v);
+	/* A conditional order right after the 'go to couple' must see the coupled
+	 * train (e.g. its number of vehicles): evaluate it again, and find the
+	 * path to wherever it leads. */
+	const Order *next = after_couple != INVALID_VEH_ORDER_ID ? v->GetOrder(after_couple) : NULL;
+	if (next != NULL && next->IsType(OT_CONDITIONAL)) {
+		v->cur_real_order_index = after_couple;
+		v->cur_implicit_order_index = after_couple;
+		ProcessOrders(v);
+		FreeTrainTrackReservation(v);
+		ReservePathAfterCouple(v);
+	}
 
 	InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
 	if (CheckReverseTrain(v)) SetBit(v->flags, VRF_REVERSING);
