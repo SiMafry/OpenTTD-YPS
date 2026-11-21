@@ -3950,6 +3950,7 @@ STR_ORDER_SORT_MAX_LENGTH_BUTTON                                :{BLACK}Max. dé
 STR_ORDER_SORT_MAX_LENGTH_CAPT                                  :{WHITE}Maximální počet jednotek ve vlaku včetně lokomotivy (0: kolik se vejde na kolej)
 STR_ORDER_SORT_MAX_LENGTH                                       :(max. {COMMA} jednotek)
 STR_NEWS_SORT_NO_DEPOT                                          :{WHITE}{VEHICLE} nemůže rozřadit: u stanice není depo
+STR_NEWS_SORT_DEPOT_WRONG_RAILTYPE                              :{WHITE}{VEHICLE} nemůže rozřadit: depo u stanice má kolej, po které lokomotiva nemůže jet (např. není elektrizované)
 STR_NEWS_SORT_NOT_IN_PLATFORM                                   :{WHITE}{VEHICLE} nemůže rozřadit: vlak není celý v peronu
 STR_ORDERS_GO_TO_TOOLTIP                                        :{BLACK}Vložit nový příkaz před označený příkaz, nebo přidat na konec seznamu. Ctrl přidá příkaz pro stanici jako 'plně naložit cokoliv', pro směrování na trati jako 'bez zastavení' a pro depo jako 'údržba'. 'Sdílet příkazy' nebo Ctrl nechá vozidlo sdílet příkazy s vybraným vozidlem. Kliknutí na vozidlo zkopíruje jeho příkazy
 

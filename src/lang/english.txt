@@ -3895,6 +3895,7 @@ STR_ORDER_SORT_MAX_LENGTH_BUTTON                                :{BLACK}Max. len
 STR_ORDER_SORT_MAX_LENGTH_CAPT                                  :{WHITE}Maximum number of units in the train, locomotive included (0: as many as the platform takes)
 STR_ORDER_SORT_MAX_LENGTH                                       :(max. {COMMA} units)
 STR_NEWS_SORT_NO_DEPOT                                          :{WHITE}{VEHICLE} can't sort: no train depot next to the station
+STR_NEWS_SORT_DEPOT_WRONG_RAILTYPE                              :{WHITE}{VEHICLE} can't sort: the depot next to the station has a track type the locomotive can't use (e.g. not electrified)
 STR_NEWS_SORT_NOT_IN_PLATFORM                                   :{WHITE}{VEHICLE} can't sort: the train does not fit the platform
 STR_ORDERS_GO_TO_TOOLTIP                                        :{BLACK}Insert a new order before the highlighted order, or add to end of list. Ctrl makes station orders 'full load any cargo', waypoint orders 'non-stop' and depot orders 'service'. 'Share orders' or Ctrl lets this vehicle share orders with the selected vehicle. Clicking a vehicle copies the orders from that vehicle. A depot order disables automatic servicing of the vehicle
 

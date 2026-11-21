@@ -4489,10 +4489,12 @@ static int TrainBackCoordinate(const Train *v, const PlatformLine &line, const T
 	const Train *u = v;
 	for (; u->Next() != NULL; u = u->Next()) c += line.back * u->CalcNextVehicleOffset();
 	if (extra != NULL) {
-		/* Rough but safe distance to the first added vehicle. */
-		c += line.back * ((u->gcache.cached_veh_length + 1) / 2 + (extra->gcache.cached_veh_length + 1) / 2 + 1);
+		/* Distance to the first added vehicle and along the added group: both
+		 * halves rounded up, which is exact for even lengths and at most one
+		 * unit too much per joint for odd ones (the added vehicles may be turned). */
+		c += line.back * ((u->gcache.cached_veh_length + 1) / 2 + (extra->gcache.cached_veh_length + 1) / 2);
 		u = extra;
-		for (; u->Next() != NULL; u = u->Next()) c += line.back * (u->CalcNextVehicleOffset() + 1);
+		for (; u->Next() != NULL; u = u->Next()) c += line.back * ((u->gcache.cached_veh_length + 1) / 2 + (u->Next()->gcache.cached_veh_length + 1) / 2);
 	}
 	c += line.back * ((u->gcache.cached_veh_length + 1) / 2);
 	return c;
@@ -4575,8 +4577,17 @@ static Train *SortTrainInYard(Train *v, StationID station)
 	TileIndex depot = FindYardDepot(st, v);
 	if (depot == INVALID_TILE) {
 		if (v->owner == _local_company) {
+			/* Is there a depot of ours, just with a track type the locomotive can't use? */
+			bool wrong_type = false;
+			TILE_AREA_LOOP(tile, st->train_station) {
+				if (!IsRailStationTile(tile) || GetStationIndex(tile) != st->index) continue;
+				for (DiagDirection dir = DIAGDIR_BEGIN; dir < DIAGDIR_END; dir++) {
+					TileIndex t = TileAddByDiagDir(tile, dir);
+					if (IsValidTile(t) && IsRailDepotTile(t) && GetTileOwner(t) == v->owner) wrong_type = true;
+				}
+			}
 			SetDParam(0, v->index);
-			AddVehicleAdviceNewsItem(STR_NEWS_SORT_NO_DEPOT, v->index);
+			AddVehicleAdviceNewsItem(wrong_type ? STR_NEWS_SORT_DEPOT_WRONG_RAILTYPE : STR_NEWS_SORT_NO_DEPOT, v->index);
 		}
 		return v;
 	}
